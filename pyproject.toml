@@ -1,0 +1,65 @@
+[project]
+name = "kb"
+version = "0.1.0"
+description = "Personal knowledge graph and todo on Neo4j"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "neo4j",
+    "click",
+    "python-dateutil",
+    # unused in phase 0, locked now so phase 1 does not re-lock
+    "holidays",
+]
+
+[project.scripts]
+kb = "kb.cli:main"
+kb-setup = "kb.setup:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# resolved against this file's directory, so pytest imports src/ from any cwd
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "B",         # bugbear
+    "UP",        # pyupgrade
+    "N",         # pep8-naming
+    "SIM",       # simplify
+    "RUF",       # ruff-specific
+    "PL",        # pylint
+    "C4",        # comprehensions
+    "PTH",       # pathlib
+    "RET",       # return
+    "ARG",       # unused arguments
+    "S",         # bandit
+]
+ignore = [
+    "PLR0913",   # many arguments: click commands
+    "S603", "S607",  # subprocess without shell, systemctl/neo4j-admin by name
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "PLR2004", "ARG001", "S105", "S106", "S107"]  # asserts, magic numbers, fixture args, fake passwords

@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+result
+result-*
+.pytest_cache/
+.ruff_cache/
+.direnv/
