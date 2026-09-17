@@ -146,13 +146,23 @@ gets `(session)-[:TOUCHED]->(record)`, one edge per pair. Which session that is:
 
 1. `KB_SESSION` in the environment: the Session carrying that `session_id`, whatever its scope. The
    hook exports it, so this is the normal path. An id no session carries links nothing, silently.
-2. Otherwise the most recently opened Session still open and not archived, inside the view scopes
+2. `CLAUDE_CODE_SESSION_ID`: the agent's own session, open or closed. Claude Code puts this in the
+   environment of every command it runs, while `KB_SESSION` only ever reaches a hook's own
+   process - so for everything an agent types itself, this is the step that answers. An id no
+   session carries falls through to the guess below.
+3. Otherwise the most recently opened Session still open and not archived, inside the view scopes
    (`--scope S` = S + global, else the cwd scope + global), opened within the last 24 hours.
-3. Otherwise nothing: the event carries no session, no edge is written, and no command fails.
+4. Otherwise nothing: the event carries no session, no edge is written, and no command fails.
 
-Two sessions open at once and no `KB_SESSION` means both write to the newer one; a session opened
-in `global` sits inside every project's view, so it outranks an older project session. Exporting
-`KB_SESSION` is the answer, and the hook does.
+Step 3 is a guess, and it is wrong whenever more than one session is live in a scope: they all
+resolve to whichever opened last, so one agent's notes land in another's journal. It is wrong
+again right after `session close` - the closed session drops out and the next write picks up
+whoever is still running. A session opened in `global` sits inside every project's view, so it
+outranks an older project session too. Steps 1 and 2 are the answer, and between them they cover
+the hook and the agent.
+
+A session the caller owns is returned whether it is open or closed: a note written after the
+journal belongs to the session that earned it, not to whoever is still running.
 
 `--id` is a REF like any other, with one exception: **a session whose id is the caller's
 `KB_SESSION` is addressable from any cwd** by `session open`, `close`, `note` and `current`. It is

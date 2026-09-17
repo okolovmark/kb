@@ -335,6 +335,29 @@ def test_latest_open_session_in_the_view_is_the_default(kb_env, monkeypatch) -> 
     assert session_of(add("No such session")) is None
 
 
+def test_the_agents_own_session_beats_the_latest_open_one(kb_env, monkeypatch) -> None:
+    """CLAUDE_CODE_SESSION_ID is in the environment of every command an agent runs, while
+    KB_SESSION only ever reaches a hook's own process. Without it every write an agent types
+    falls through to "the session that opened last", so on a project with several live
+    sessions one agent's notes land in another's journal, and the first write after
+    `session close` picks up whichever stranger is still running."""
+    open_session("mine")
+    open_session("theirs")  # opened last, so the fallback would pick this one
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "mine")
+    assert session_of(add("Mine")) == "2026-09-14-1"
+    assert last_event_session(str(add("Stamped"))) == "mine"
+    # a session the agent owns is still its own once closed - a late note belongs to the
+    # session that earned it, not to whoever is still running
+    kb("session", "close", "--id", "mine")
+    assert session_of(add("After my close")) == "2026-09-14-1"
+    # KB_SESSION still wins, and an id with no record still falls through to the guess
+    monkeypatch.setenv("KB_SESSION", "theirs")
+    assert session_of(add("Hook wins")) == "2026-09-14-2"
+    monkeypatch.delenv("KB_SESSION")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "no-such-agent")
+    assert session_of(add("Unknown agent")) == "2026-09-14-2"
+
+
 # --- today ------------------------------------------------------------------------------
 
 

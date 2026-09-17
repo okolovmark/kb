@@ -3,6 +3,7 @@
 import datetime as dt
 import itertools
 import json
+import os
 import re
 from dataclasses import dataclass, field, fields
 from typing import Any
@@ -949,12 +950,28 @@ def current_session(
     """The session a write belongs to.
 
     ``KB_SESSION`` set: the Session with that id whatever its scope (the hook exports it and
-    knows better than the cwd), or None when the hook opened none. Otherwise the most recently
+    knows better than the cwd), or None when the hook opened none. Failing that, the agent's
+    own session: ``CLAUDE_CODE_SESSION_ID`` is in the environment of every command Claude
+    runs, while ``KB_SESSION`` only ever reaches a hook's own process - so without this step
+    everything an agent types falls through to the guess below. Otherwise the most recently
     opened, still open, not archived Session in the view *scopes* (None = every scope) opened
     within the last 24 hours; None when there is none.
+
+    The guess is wrong whenever more than one session is live in a scope, which is the normal
+    case on a busy project: all of them resolve to whichever opened last, so one agent's notes
+    land in another's journal. It is also wrong right after ``kb session close`` - the closed
+    session drops out and the next write silently picks up a stranger's, which is how this was
+    found (2026-09-17, three concurrent sessions on kaertech-odoo-16). A session the agent
+    owns is returned whether it is open or closed: a late note belongs to the session that
+    earned it, not to whoever is still running.
     """
     if env_id:
         return session_by_id(tx, env_id)
+    agent_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if agent_id:
+        own = session_by_id(tx, agent_id)
+        if own is not None:
+            return own
     row = tx.run(
         "MATCH (s:Record:Session) WHERE s.closed_at IS NULL AND s.opened_at >= $since "
         "AND s.archived_at IS NULL AND ($scopes IS NULL OR s.scope IN $scopes) "

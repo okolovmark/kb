@@ -176,5 +176,7 @@ def kb_env(
     monkeypatch.setenv("KB_NEO4J_AUTH", str(tmp_path / "no-such-auth-file"))
     monkeypatch.setenv("KB_TODAY", "2026-09-14")  # a plain Monday
     monkeypatch.delenv("KB_SESSION", raising=False)
+    # The suite normally runs from an agent's own shell, which carries this one.
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.chdir(tmp_path)  # outside every scope path
     return KbEnv(config_file, proj, tmp_path, driver)

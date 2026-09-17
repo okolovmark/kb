@@ -67,6 +67,9 @@ dir = "~/kb-backups"
   written under it carry that date too, at the real time of day.
 - `KB_SESSION=<id>` — tags every event the process writes with that session id, and decides which
   session record a write belongs to (see [model.md](model.md)).
+- `CLAUDE_CODE_SESSION_ID=<id>` — read, never set by kb: Claude Code exports it into every command
+  it runs, and a write with no `KB_SESSION` belongs to the session carrying it (see
+  [model.md](model.md)).
 
 When nothing listens on the bolt port every command fails in under a second with `neo4j-kb is not
 reachable on bolt://127.0.0.1:<port>: kb status / kb service start`; `today`, `next`, `index` and
