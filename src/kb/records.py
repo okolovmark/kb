@@ -601,8 +601,12 @@ def create(
     return get(tx, rid)
 
 
-def link(tx: ManagedTransaction, a: Record, rel: str, b: Record, at: dt.datetime) -> bool:
-    """``(a)-[:REL]->(b)``, idempotent; True when the relationship was created now."""
+def link(
+    tx: ManagedTransaction, a: Record, rel: str, b: Record, at: dt.datetime
+) -> tuple[bool, list[int]]:
+    """``(a)-[:REL]->(b)``, idempotent; whether it was created now, and the sessions an
+    OPENED_IN moved away from (see displace_opened_in - naming the new session is the whole
+    repair, no unlink behind it)."""
     rel = check_rel_type(rel)
     if a.id == b.id:
         raise RecordError("a record cannot link to itself")
@@ -610,7 +614,8 @@ def link(tx: ManagedTransaction, a: Record, rel: str, b: Record, at: dt.datetime
         f"MATCH (:Record {{id: $a}})-[l:{rel}]->(:Record {{id: $b}}) RETURN 1", a=a.id, b=b.id
     ).single()
     if present is not None:
-        return False
+        return False, []
+    displaced = displace_opened_in(tx, a.id, b.id) if rel == "OPENED_IN" else []
     tx.run(
         f"MATCH (a:Record {{id: $a}}), (b:Record {{id: $b}}) "
         f"CREATE (a)-[:{rel} {{created_at: $at}}]->(b)",
@@ -618,7 +623,7 @@ def link(tx: ManagedTransaction, a: Record, rel: str, b: Record, at: dt.datetime
         b=b.id,
         at=at,
     )
-    return True
+    return True, displaced
 
 
 def unlink(tx: ManagedTransaction, a: Record, rel: str, b: Record) -> int:
@@ -982,18 +987,40 @@ def current_session(
     return Record.from_node(row["s"]) if row else None
 
 
+def displace_opened_in(tx: ManagedTransaction, record_id: int, session_id: int) -> list[int]:
+    """Drop the record's ``OPENED_IN`` edges to any OTHER session; the ids dropped.
+
+    A record is created once, in one session, so OPENED_IN is single-valued on write: writing
+    one MOVES it rather than adding a second. Without this, re-pointing a record at the session
+    that really created it left it opened in two, which is what repairing the 2026-09-17
+    attribution bug produced - and the repair then needed an unlink nobody would think of.
+
+    A merge is the one place two survive: ``move_edges_and_events`` carries the absorbed
+    record's OPENED_IN onto the survivor, which genuinely then holds two histories.
+    """
+    rows = tx.run(
+        "MATCH (r:Record {id: $r})-[l:OPENED_IN]->(s:Record:Session) WHERE s.id <> $s "
+        "WITH l, s.id AS sid DELETE l RETURN sid",
+        r=record_id,
+        s=session_id,
+    )
+    return [row["sid"] for row in rows]
+
+
 def attach(
     tx: ManagedTransaction, session: Record, record_id: int, rel: str, at: dt.datetime
 ) -> bool:
     """``(record)-[:OPENED_IN]->(session)`` or ``(session)-[:TOUCHED]->(record)``, MERGEd:
-    one edge per pair. False when nothing was created (present already, or the session
-    itself)."""
+    one edge per pair, and OPENED_IN single-valued (see displace_opened_in). False when
+    nothing was created (present already, or the session itself)."""
     if record_id == session.id:
         return False
     pattern = {
         "OPENED_IN": "(r)-[l:OPENED_IN]->(s)",
         "TOUCHED": "(s)-[l:TOUCHED]->(r)",
     }[rel]
+    if rel == "OPENED_IN":
+        displace_opened_in(tx, record_id, session.id)
     summary = tx.run(
         f"MATCH (s:Record:Session {{id: $s}}), (r:Record {{id: $r}}) "
         f"MERGE {pattern} ON CREATE SET l.created_at = $at",

@@ -1503,10 +1503,10 @@ def link(app: App, a: str, rel_type: str, b: str, scope_flag: str | None) -> Non
     scopes, _ = view_scopes(app.cfg, scope_flag)
     at = calendar.now(app.cfg)
 
-    def work(tx: ManagedTransaction) -> tuple[records.Record, records.Record, str, bool]:
+    def work(tx: ManagedTransaction) -> tuple[records.Record, records.Record, str, bool, list[int]]:
         rel = records.check_rel_type(rel_type)
         rec_a, rec_b = records.resolve(tx, a, scopes), records.resolve(tx, b, scopes)
-        created = records.link(tx, rec_a, rel, rec_b, at)
+        created, displaced = records.link(tx, rec_a, rel, rec_b, at)
         if created:
             current = app.current_session(tx, scopes, at)
             records.add_event(
@@ -1518,13 +1518,17 @@ def link(app: App, a: str, rel_type: str, b: str, scope_flag: str | None) -> Non
                 session=app.stamp_of(current),
             )
             touch_session(tx, current, at, rec_a.id, rec_b.id)
-        return rec_a, rec_b, rel, created
+        return rec_a, rec_b, rel, created, displaced
 
     with cli_errors():
-        rec_a, rec_b, rel, created = app.write(work)
+        rec_a, rec_b, rel, created, displaced = app.write(work)
     state = "" if created else "  (already linked)"
+    # OPENED_IN is single-valued, so naming a new session MOVED the record out of its old one -
+    # say which, or the repair looks like it did nothing to the edge that was wrong.
+    if displaced:
+        state += "  (moved from " + ", ".join(f"[{sid}]" for sid in displaced) + ")"
     app.emit(
-        {"a": rec_a.id, "type": rel, "b": rec_b.id, "created": created},
+        {"a": rec_a.id, "type": rel, "b": rec_b.id, "created": created, "displaced": displaced},
         f"{record_line(rec_a)} -[{rel}]-> {record_line(rec_b)}{state}",
     )
 

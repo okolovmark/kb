@@ -174,6 +174,13 @@ keep winning the 24-hour fallback and never reach the no-summary line. Export `K
 the hook's `session open` call; without it a cross-scope resume is refused loudly instead of
 leaving behind a session nothing can close.
 
+**`OPENED_IN` is single-valued on write.** A record is created once, in one session, so writing
+one moves it: `kb link <record> OPENED_IN <session>` drops the record's edge to any other session
+and says `(moved from [id])`. Re-pointing a record at the session that really created it is that
+one command, with no `unlink` behind it. The one place two survive is a merge - `records merge`
+carries the absorbed record's `OPENED_IN` onto the survivor, which genuinely then holds two
+histories.
+
 `Event.session` still carries the raw `KB_SESSION` when it names no session record, since it
 answers which process wrote the event, not which record was open. `no_summary` follows the body
 whichever command writes it, `session note`, `session close --body`, `edit --body` or `append`.

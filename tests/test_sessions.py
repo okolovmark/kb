@@ -358,6 +358,30 @@ def test_the_agents_own_session_beats_the_latest_open_one(kb_env, monkeypatch) -
     assert session_of(add("Unknown agent")) == "2026-09-14-2"
 
 
+def test_opened_in_is_single_valued_so_re_pointing_is_one_command(kb_env, monkeypatch) -> None:
+    """A record is created once, in one session. Re-pointing one at the session that really
+    created it used to leave it opened in TWO, because `kb link` only ever added an edge - the
+    shape the 2026-09-17 attribution repair produced, and it needed an unlink nobody would
+    think of. Writing an OPENED_IN now moves it and says where from."""
+    open_session("theirs")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "theirs")
+    task = add("Attributed to the wrong session")
+    wrong = kb_json("session", "current")["id"]
+    mine = open_session("mine")["id"]
+
+    out = kb("link", str(task), "OPENED_IN", str(mine))
+
+    assert f"(moved from [{wrong}])" in out.output
+    opened_in = [lk for lk in links(str(task)) if lk[0] == "OPENED_IN"]
+    assert opened_in == [("OPENED_IN", "->", mine)], "one OPENED_IN, the new one"
+    # the session that did the repair touched the record, which is a different edge
+    assert ("TOUCHED", "<-", wrong) in links(str(task))
+    assert kb_json("--json", "link", str(task), "OPENED_IN", str(mine))["displaced"] == []
+    # the automatic path is unaffected: a record created now has one, and nothing to move
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "mine")
+    assert kb_json("--json", "link", str(add("Fresh")), "RELATED", str(task))["displaced"] == []
+
+
 # --- today ------------------------------------------------------------------------------
 
 
