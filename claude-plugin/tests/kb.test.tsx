@@ -47,13 +47,6 @@ const SHOW = JSON.stringify({
   links: [{ type: 'TOUCHED', direction: '<-', id: 592, title: 'requests' }],
   events: [{ kind: 'shown', at: '2026-10-07T02:33:32+00:00', note: null }],
 })
-const NODE = {
-  plugin: 'kb',
-  component: 'Pane',
-  requestId: 'kb-node',
-  props: { title: 'kb [207]', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
-} as const
-
 type Use = { tool_use_id: string; tool: string; input: Record<string, unknown>; text?: string }
 
 type Panes = { list: { id: string; isShown: boolean }[]; calls: string[] }
@@ -116,6 +109,7 @@ describe('parsers', () => {
     expect(commitDirOf('git -C /r/kb commit -q -m x', '/p')).toBe('/r/kb')
     expect(commitDirOf('git add -A && git commit -m x', '/p')).toBe('/p')
     expect(commitDirOf('git -C "$PROJ" commit -m x', '/p')).toBe(null)
+    expect(commitDirOf('K=/r/kb; git -C $K add -A && git -C $K commit -q -F - <<EOF', '/p')).toBe('/r/kb')
     expect(commitDirOf('git status', '/p')).toBe(null)
     const done = { ...EMPTY_JOURNAL, files: ['a', 'b'], summarized: true, mark: 2 }
     expect(sinceSummary(done)).toBe(0)
@@ -187,7 +181,7 @@ test('the journal counts what the tools touched and writes the summary through k
   await band.unmount()
 })
 
-test('open shows the record in its own pane; the legend names the circles', async ($, on) => {
+test('open shows the record in the same pane; the legend names the circles', async ($, on) => {
   const runs: string[][] = []
   const clock = engine(on, runs)
   await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
@@ -201,7 +195,7 @@ test('open shows the record in its own pane; the legend names the circles', asyn
   await pane.unmount()
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    const opened = await $.ui.mount({ ...NODE, surface })
+    const opened = await $.ui.mount({ ...PANE, surface })
     expect(await opened.find({ text: '[207] part standard' })).toBeDefined()
     expect(await opened.find({ text: 'loud: 30 working days' })).toBeDefined()
     expect(await opened.find({ text: '[592] requests' })).toBeDefined()
@@ -221,26 +215,34 @@ test('the journal also counts what the transcript held before the module loaded'
   await band.unmount()
 })
 
-test('open brings a record tab hidden behind the standup to the front; today goes back', async ($, on) => {
+test('open and ← today switch the view at once, with no pane operation inside the press', async ($, on) => {
   const runs: string[][] = []
-  const panes: Panes = { list: [{ id: 'kb-today', isShown: true }, { id: 'kb-node', isShown: false }], calls: [] }
+  const panes: Panes = { list: [{ id: 'kb-today', isShown: true }], calls: [] }
   const clock = engine(on, runs, [], panes)
   await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
-  panes.calls.length = 0
-
-  const today = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await today.press({ key: 'open-207' })
-  // the pane opens inside the press, before any timer runs: a timer's open would count as unasked
-  expect(panes.calls.slice(-2)).toEqual(['close kb-node', 'open kb-node'])
-  expect(runs).not.toContainEqual(['kb', '--json', 'show', '207'])
   await clock.advance(0)
-  expect(runs).toContainEqual(['kb', '--json', 'show', '207'])
-  await today.unmount()
-
   panes.calls.length = 0
-  const opened = await $.ui.mount({ ...NODE, surface: 'desktop' })
-  await opened.press({ key: 'node-today' })
-  expect(panes.calls[0]).toBe('close kb-node')
-  expect(panes.calls.at(-1)).toBe('open kb-today')
-  await opened.unmount()
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pane.press({ key: 'open-207' })
+  expect(await pane.find({ text: 'loading [207]…' })).toBeDefined()
+  await clock.advance(0)
+  expect(await pane.find({ text: '[207] part standard' })).toBeDefined()
+  await pane.press({ key: 'node-today' })
+  expect(await pane.find({ key: 'kb-head' })).toBeDefined()
+  expect(panes.calls).toEqual([])
+  await pane.unmount()
+})
+
+test("the band's open brings the pane from behind another tab", async ($, on) => {
+  const runs: string[][] = []
+  const panes: Panes = { list: [{ id: 'kb-today', isShown: false }], calls: [] }
+  const clock = engine(on, runs, [], panes)
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await clock.advance(0)
+  panes.calls.length = 0
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await band.press({ key: 'kb-open' })
+  expect(panes.calls).toEqual(['close kb-today', 'open kb-today'])
+  await band.unmount()
 })

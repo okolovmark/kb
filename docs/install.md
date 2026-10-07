@@ -53,7 +53,7 @@ from the next Claude Code session.
 | Piece | What it does |
 | --- | --- |
 | band above the prompt | today's counts (loud, normal, due, quiet, sessions without summary); `open` opens the pane |
-| pane, `/kb` | `kb --json today` as rows with `done` (asks yes/no), `snooze` (tomorrow), `+7d`, `skip` (window tasks) |
+| pane, `/kb` | `kb --json next` grouped by level, whisper folded; each task a card with `open`, `done` (asks yes/no), `snooze` (tomorrow), `+7d`, `skip` (window tasks); `open` shows the record in the same pane (body, links to follow, events) and `← today` goes back; `/kb <id>` opens a record |
 | journal | files from Edit/Write, commits from `git commit` output (`git log -1` after a quiet `-q` one), PR urls from `gh pr create`, kb writes from Bash, subagents included; the band shows `write summary` before the first summary and `N new since the summary` with `update summary` once the session went on after it, nothing while the summary is up to date |
 | `/journal`, tool `mcp__kb__write_journal` | one prompt-cached request over the session's own transcript, then `kb session close --title … --body-file …` |
 

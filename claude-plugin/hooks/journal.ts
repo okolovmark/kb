@@ -107,8 +107,16 @@ export function commitDirOf(command: string, cwd: string): string | null {
   if (match === null) return null
   const raw = /-C\s+(\S+)/.exec(match[1] ?? '')?.[1]
   if (raw === undefined) return cwd
-  const dir = raw.replace(/^["']|["']$/g, '')
-  if (dir.startsWith('$')) return null
+  // `K=/path; git -C $K commit`: a variable the same command assigns is read from it
+  const assigned = new Map(
+    [...command.matchAll(/(?:^|[;&|\n]\s*)([A-Za-z_]\w*)=("[^"]*"|'[^']*'|[^\s;&|]+)/g)].map(
+      m => [m[1] ?? '', (m[2] ?? '').replace(/^["']|["']$/g, '')] as const,
+    ),
+  )
+  const dir = raw
+    .replace(/^["']|["']$/g, '')
+    .replace(/\$\{?([A-Za-z_]\w*)\}?/g, (whole, name: string) => assigned.get(name) ?? whole)
+  if (dir.includes('$')) return null
   return dir.startsWith('/') ? dir : `${cwd.replace(/\/+$/, '')}/${dir}`
 }
 

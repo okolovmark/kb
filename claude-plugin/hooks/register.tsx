@@ -18,7 +18,6 @@ import { parseNode } from './node'
 import { LEVELS, countByLevel, levelStyle, parseToday, plusDays } from './today'
 
 const PANE = 'kb-today'
-const NODE_PANE = 'kb-node'
 const REFRESH_MS = 5 * 60_000
 const JOURNALS_KEPT = 30
 const WIDE = 110
@@ -45,6 +44,7 @@ const armed = atom({ plugin: 'kb', key: 'armed' } as const, null)
 const busy = atom({ plugin: 'kb', key: 'busy' } as const, null)
 const node = atom({ plugin: 'kb', key: 'node' } as const, null)
 const nodeLoading = atom({ plugin: 'kb', key: 'nodeLoading' } as const, null)
+const view = atom({ plugin: 'kb', key: 'view' } as const, null)
 const showQuiet = atom({ plugin: 'kb', key: 'showQuiet' } as const, false)
 const journal = atom({ plugin: 'kb', key: 'journal' } as const, EMPTY_JOURNAL)
 
@@ -93,22 +93,22 @@ async function showPane($: EngineInterface, id: string, title: string): Promise<
   await $.ui.open({ id, title })
 }
 
+// the band's open and /kb: the pane in front, on the list
 async function openPane($: EngineInterface): Promise<void> {
-  await showPane($, PANE, 'kb today')
+  await update($, view, () => null)
+  await showPane($, PANE, 'kb')
 }
 
-// back from a record: its tab closes and the standup is in front again
+// One pane, two views. Opening a record or going back is a state change the pane redraws on at once:
+// a pane operation (open, close, panes) inside a press waited on the surface the press itself held,
+// which took two clicks or ran out the press's 10 s.
 async function backToToday($: EngineInterface): Promise<void> {
-  await $.ui.close({ id: NODE_PANE })
-  await openPane($)
+  await update($, view, () => null)
 }
 
-// Called inside the press: a pane the person's press opens is placed at any width, while one a timer
-// opens counts as unasked and may wait undrawn. So the pane opens here, saying it loads, and only the
-// kb call goes to a timer.
 async function openNode($: EngineInterface, id: number): Promise<void> {
   await update($, nodeLoading, () => id)
-  await showPane($, NODE_PANE, `kb [${id}]`)
+  await update($, view, () => id)
   soon($, () => fetchNode($, id))
 }
 
@@ -237,6 +237,7 @@ export const register: Register = on => {
     const id = Number(e.args.trim())
     if (Number.isInteger(id) && id > 0) {
       await openNode($, id)
+      await showPane($, PANE, 'kb')
       return { text: `kb: [${id}] opened.` }
     }
     await refreshToday($)
@@ -322,7 +323,9 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+  // the list view: a record view takes the pane while one is open
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    if ((await read($, view)) !== null) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     const data = await read($, today)
     const armedId = await read($, armed)
@@ -415,13 +418,23 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: NODE_PANE }, async ($, e) => {
+  // the record view
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const viewing = await read($, view)
+    if (viewing === null) return next(e)
     const { Box, Button, Markdown, Text } = $.ui.resolve(e)
     const shown = await read($, node)
     const loading = await read($, nodeLoading)
     const armedId = await read($, armed)
-    if (loading !== null && shown?.id !== loading) return <Text dimColor>{`loading [${loading}]…`}</Text>
-    if (shown === null) return <Text dimColor>kb: nothing opened yet</Text>
+    const back = <Button key="node-today" label="← today" onPress={() => backToToday($)} />
+    if (shown?.id !== viewing) {
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          {back}
+          <Text dimColor>{loading === viewing ? `loading [${viewing}]…` : `kb: [${viewing}] could not be read`}</Text>
+        </Box>
+      )
+    }
     const hasCards = e.surface !== 'terminal'
 
     const style = shown.urgency === null ? null : levelStyle(shown.urgency.level)
@@ -438,7 +451,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" rowGap={1}>
         <Box key="node-actions" flexDirection="row" columnGap={1} flexWrap="wrap" alignItems="center">
-          <Button key="node-today" label="← today" onPress={() => backToToday($)} />
+          {back}
           {isOpenTask &&
             (armedId === shown.id ? (
               <Box flexDirection="row" columnGap={1} alignItems="center">
