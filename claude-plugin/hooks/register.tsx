@@ -179,8 +179,13 @@ async function restoreJournal($: EngineInterface): Promise<void> {
   const root = await $.session.root()
   const messages = await $.session.messages()
   const uses = messages.flatMap(message => message.toolUses)
+  // a stored journal already knows its summary and what it covered; the replay only adds facts
+  const isStored = saved !== undefined
   await record($, current =>
-    uses.reduce((j, use) => mergeFacts(j, factsOf({ ...use, tool: String(use.tool) }, root)), current),
+    uses.reduce((j, use) => {
+      const facts = factsOf({ ...use, tool: String(use.tool) }, root)
+      return mergeFacts(j, isStored ? { ...facts, isSummary: false } : facts)
+    }, current),
   )
 }
 

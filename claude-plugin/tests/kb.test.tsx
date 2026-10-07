@@ -106,6 +106,8 @@ describe('parsers', () => {
     expect(kbWritesIn('KB_SESSION=abc kb session note "n"')).toEqual(['kb session note "n"'])
     expect(writesSummary('kb session close --body-file /tmp/b.md')).toBe(true)
     expect(writesSummary('kb session close --id x')).toBe(false)
+    expect(writesSummary('KB_SESSION=x kb session close --id x --body-file /t/b.md')).toBe(true)
+    expect(writesSummary("python3 - <<'EOF'\nexpect(writesSummary('kb session close --body-file /tmp/b.md'))\nEOF")).toBe(false)
     expect(commitDirOf('git -C /r/kb commit -q -m x', '/p')).toBe('/r/kb')
     expect(commitDirOf('git add -A && git commit -m x', '/p')).toBe('/p')
     expect(commitDirOf('git -C "$PROJ" commit -m x', '/p')).toBe(null)

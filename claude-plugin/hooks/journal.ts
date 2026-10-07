@@ -13,7 +13,8 @@ export const EMPTY_JOURNAL: Journal = {
 
 // `kb done 207`, `KB_SESSION=x kb session note "…"` after a separator or env assignments
 const KB_WRITE = /(?:^|[;&|(]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*kb\s+(add|append|done|edit|link|promote|archive|snooze|skip|session\s+note)\b([^\n;&|]*)/g
-const SUMMARY_WRITE = /\bkb\s+session\s+close\b[^\n]*--(?:body|body-file|title)\b/
+// a real `kb session close --body…` call, as a command of its own, not the words inside a string
+const SUMMARY_WRITE = /(?:^|[;&|(]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*kb\s+session\s+close\b[^\n;&|]*--(?:body|body-file|title)\b/m
 const COMMIT_LINE = /^\[([^\]\s]+)(?: \(root-commit\))? ([0-9a-f]{7,40})\] (.+)$/gm
 const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g
 
