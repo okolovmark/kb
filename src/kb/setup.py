@@ -1,5 +1,6 @@
 """kb-setup: idempotent installer for the neo4j-kb user service, config, auth and schema."""
 
+import json
 import os
 import secrets
 import shutil
@@ -19,6 +20,12 @@ CONF_HEADER = (
     "# Rendered by kb-setup from config.toml; edits here are overwritten on the next run.\n"
 )
 RUNNING_STATES = frozenset({"active", "activating"})
+
+# The Claude Code plugin the package ships, and where Claude Code reads plugin folders from: the
+# env block of the user's settings (never a project's), a path list.
+PLUGIN_ENV = "CLAUDE_CODE_PLUGIN_DIRS"
+PLUGIN_TAIL = "share/kb/claude-plugin"
+PROFILE_PLUGIN = "~/.nix-profile/" + PLUGIN_TAIL
 
 
 def package_conf_dir(pkg: Path) -> Path:
@@ -158,6 +165,44 @@ def register_gc_root(runner: Runner, paths: Paths, pkg: Path, nix_store: str | N
     )
 
 
+def claude_plugin_dir(home: Path) -> str | None:
+    """The plugin folder to register: the profile link, which survives an upgrade, when kb is in the
+    profile; else this package's own (KB_PLUGIN_DIR, set by the wrapper), as under `nix run`."""
+    if (home / ".nix-profile" / PLUGIN_TAIL / ".claude-plugin" / "plugin.json").is_file():
+        return PROFILE_PLUGIN
+    own = os.environ.get("KB_PLUGIN_DIR", "")
+    return own if own and (Path(own) / ".claude-plugin" / "plugin.json").is_file() else None
+
+
+def register_claude_plugin(home: Path, plugin_dir: str, *, dry_run: bool = False) -> str:
+    """Put plugin_dir on CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json; returns what happened.
+
+    Other keys and other plugin folders are kept; an earlier kb plugin path (a store path, the
+    profile link) is replaced, never doubled. A settings file that is not a JSON object is left as
+    it is."""
+    claude = home / ".claude"
+    if not claude.is_dir():
+        return "skipped: no ~/.claude (Claude Code not installed)"
+    settings = claude / "settings.json"
+    try:
+        data = json.loads(settings.read_text()) if settings.exists() else {}
+    except json.JSONDecodeError as exc:
+        return f"skipped: {settings} is not valid JSON ({exc.msg}), left as it is"
+    env = data.get("env", {}) if isinstance(data, dict) else None
+    if not isinstance(env, dict):
+        return f"skipped: {settings} has no JSON object for env, left as it is"
+    current = [part for part in str(env.get(PLUGIN_ENV, "")).split(os.pathsep) if part]
+    kept = [part for part in current if not part.rstrip("/").endswith("/" + PLUGIN_TAIL)]
+    wanted = [*kept, plugin_dir]
+    if wanted == current:
+        return f"registered in {settings}"
+    if not dry_run:
+        env[PLUGIN_ENV] = os.pathsep.join(wanted)
+        data["env"] = env
+        settings.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return f"{'would add' if dry_run else 'added'} to {PLUGIN_ENV} in {settings}"
+
+
 def install(
     cfg: Config,
     paths: Paths,
@@ -231,7 +276,13 @@ def summary(
     default=None,
     help="With --dry-run: render every path under DIR instead of ~.",
 )
-def main(dry_run: bool, home: Path | None) -> None:
+@click.option(
+    "--no-claude-plugin",
+    is_flag=True,
+    help="Leave ~/.claude/settings.json alone (by default the kb plugin is put on "
+    "CLAUDE_CODE_PLUGIN_DIRS).",
+)
+def main(dry_run: bool, home: Path | None, no_claude_plugin: bool) -> None:
     """``kb-setup`` entry point; --dry-run prints the unit and conf and writes nothing."""
     if home is not None and not dry_run:
         raise click.UsageError("--home is only valid together with --dry-run")
@@ -248,6 +299,8 @@ def main(dry_run: bool, home: Path | None) -> None:
         click.echo(f"# {paths.unit_file}\n{unit}")
         click.echo(f"# {paths.conf_file}\n{conf}", nl=False)
         click.echo(f"# copied from {package_conf_dir(pkg)}: {', '.join(LOG_CONFIGS)}")
+        if not no_claude_plugin:
+            click.echo(f"# claude plugin: {claude_line(home, dry_run=True)}")
         return
     try:
         install(
@@ -269,3 +322,16 @@ def main(dry_run: bool, home: Path | None) -> None:
         raise click.ClickException(f"not found: {exc.filename or exc}") from exc
     except (ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
+    if not no_claude_plugin:
+        click.echo(f"claude:   {claude_line(home, dry_run=False)}")
+
+
+def claude_line(home: Path, *, dry_run: bool) -> str:
+    """The summary line for the Claude Code plugin step."""
+    plugin_dir = claude_plugin_dir(home)
+    if plugin_dir is None:
+        return "skipped: this kb package has no Claude Code plugin"
+    try:
+        return f"{plugin_dir}: {register_claude_plugin(home, plugin_dir, dry_run=dry_run)}"
+    except OSError as exc:
+        return f"skipped: {exc}"

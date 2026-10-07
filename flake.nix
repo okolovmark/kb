@@ -72,7 +72,8 @@
             mkdir -p $out/bin
             for bin in kb kb-setup; do
               makeWrapper ${kbEnv}/bin/$bin $out/bin/$bin \
-                --set KB_NEO4J_PACKAGE ${neo4j}
+                --set KB_NEO4J_PACKAGE ${neo4j} \
+                --set KB_PLUGIN_DIR $out/share/kb/claude-plugin
             done
             # the Claude Code plugin; loaded from ~/.nix-profile/share/kb/claude-plugin (docs/install.md)
             mkdir -p $out/share/kb

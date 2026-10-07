@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import stat
@@ -13,12 +14,14 @@ from kb.db import connect, schema_present
 from kb.paths import LOG_CONFIGS, UNIT_NAME, Paths
 from kb.runner import RecordingRunner
 from kb.setup import (
+    claude_plugin_dir,
     conf_settings,
     ensure_auth,
     install,
     main,
     package_conf_dir,
     package_default_conf,
+    register_claude_plugin,
     render_conf,
     render_unit,
     write_if_changed,
@@ -303,3 +306,67 @@ def test_install_propagates_a_failed_neo4j_admin_call(isolated, fake_systemctl) 
         install(
             cfg, paths, pkg, conf=conf, unit=unit, runner=RecordingRunner(failing), nix_store=None
         )
+
+
+PROFILE_PLUGIN = "~/.nix-profile/share/kb/claude-plugin"
+
+
+def _plugin(folder: Path) -> Path:
+    (folder / ".claude-plugin").mkdir(parents=True)
+    (folder / ".claude-plugin" / "plugin.json").write_text("{}")
+    return folder
+
+
+def test_claude_plugin_dir_prefers_the_profile_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("KB_PLUGIN_DIR", raising=False)
+    assert claude_plugin_dir(tmp_path) is None
+    own = _plugin(tmp_path / "store" / "share" / "kb" / "claude-plugin")
+    monkeypatch.setenv("KB_PLUGIN_DIR", str(own))
+    assert claude_plugin_dir(tmp_path) == str(own)
+    _plugin(tmp_path / ".nix-profile" / "share" / "kb" / "claude-plugin")
+    assert claude_plugin_dir(tmp_path) == PROFILE_PLUGIN
+
+
+def test_register_claude_plugin_keeps_other_keys_and_folders_and_replaces_an_old_kb(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".claude").mkdir()
+    settings = tmp_path / ".claude" / "settings.json"
+    old_kb = "/nix/store/abc-kb-0.1.0/share/kb/claude-plugin"
+    settings.write_text(
+        json.dumps(
+            {"model": "opus", "env": {"FOO": "1", "CLAUDE_CODE_PLUGIN_DIRS": f"/x/mine:{old_kb}"}}
+        )
+    )
+    assert register_claude_plugin(tmp_path, PROFILE_PLUGIN).startswith("added")
+    data = json.loads(settings.read_text())
+    assert data["model"] == "opus"
+    assert data["env"]["FOO"] == "1"
+    assert data["env"]["CLAUDE_CODE_PLUGIN_DIRS"] == f"/x/mine:{PROFILE_PLUGIN}"
+
+    written = settings.read_text()
+    assert register_claude_plugin(tmp_path, PROFILE_PLUGIN).startswith("registered")
+    assert settings.read_text() == written
+
+
+def test_register_claude_plugin_creates_settings_and_dry_run_writes_nothing(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    settings = tmp_path / ".claude" / "settings.json"
+    assert register_claude_plugin(tmp_path, PROFILE_PLUGIN, dry_run=True).startswith("would add")
+    assert not settings.exists()
+    assert register_claude_plugin(tmp_path, PROFILE_PLUGIN).startswith("added")
+    assert json.loads(settings.read_text()) == {"env": {"CLAUDE_CODE_PLUGIN_DIRS": PROFILE_PLUGIN}}
+
+
+def test_register_claude_plugin_leaves_a_missing_claude_or_a_broken_file_alone(
+    tmp_path: Path,
+) -> None:
+    assert register_claude_plugin(tmp_path, PROFILE_PLUGIN).startswith("skipped: no ~/.claude")
+    (tmp_path / ".claude").mkdir()
+    settings = tmp_path / ".claude" / "settings.json"
+    for broken in ("{ not json", "[1, 2]", '{"env": "x"}'):
+        settings.write_text(broken)
+        assert register_claude_plugin(tmp_path, PROFILE_PLUGIN).startswith("skipped:")
+        assert settings.read_text() == broken

@@ -49,7 +49,9 @@ kb status
 
 `kb-setup` is idempotent and safe to re-run. It renders a Neo4j config, generates a password, writes
 and starts the `neo4j-kb` user service, and creates the schema. Everything it touches lives under
-`~/.config/kb`, `~/.local/share/kb` and one systemd unit. `kb status` exits non-zero whenever
+`~/.config/kb`, `~/.local/share/kb` and one systemd unit, plus the kb plugin on
+`CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` when Claude Code is installed (a standup pane
+and a session journal; `--no-claude-plugin` skips it). `kb status` exits non-zero whenever
 something needs `kb-setup` again, an upgrade included. The exact file list, the upgrade step and the
 disk footprint are in [docs/install.md](docs/install.md).
 

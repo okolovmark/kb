@@ -27,6 +27,7 @@ when the unit or conf changed.
 | `~/.local/share/kb/neo4j/{data,logs,run,import,plugins}` | the writable `server.directories.*`, 0700; tx logs under `data/transactions` |
 | `~/.local/share/kb/neo4j-pkg` | indirect nix GC root for the neo4j package the unit runs |
 | `~/kb-backups/` | dumps; created by the first `kb backup` / `kb restore`, 0700 |
+| `~/.claude/settings.json` | `env.CLAUDE_CODE_PLUGIN_DIRS` gets the kb plugin folder, when `~/.claude` exists (below) |
 
 Neo4j is `pkgs.neo4j` from the flake's nixpkgs pin (`nix build .#neo4j`); its store path is baked
 into the `kb` and `kb-setup` wrappers as `KB_NEO4J_PACKAGE` and written into the unit.
@@ -37,11 +38,17 @@ A user service stops with the last login session unless `loginctl enable-linger 
 
 `claude-plugin/` is a function-hooks plugin (Claude Code mods, early access), installed with the
 package as `~/.nix-profile/share/kb/claude-plugin`. Claude Code loads it from the `env` block of
-`~/.claude/settings.json`:
+`~/.claude/settings.json`, and `kb-setup` puts it there (`--no-claude-plugin` skips the step):
 
 ```json
 { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/.nix-profile/share/kb/claude-plugin" } }
 ```
+
+The step keeps every other key and every other folder on the list, replaces an earlier kb plugin
+path (a store path from `nix run`), and leaves a settings file that is not a JSON object untouched.
+Without kb in the profile it registers the package's own folder (`KB_PLUGIN_DIR`, set by the
+wrapper), which a garbage collection can remove: re-run `kb-setup` after `nix run`. The plugin loads
+from the next Claude Code session.
 
 | Piece | What it does |
 | --- | --- |
