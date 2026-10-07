@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import type { MockClock } from 'claude-code/testing'
 
 import { commitsIn, kbWritesIn, parseJournalReply, prUrlsIn, writesSummary } from '../hooks/journal'
 import { parseNode } from '../hooks/node'
@@ -46,10 +47,10 @@ const NODE = {
 
 type Use = { tool_use_id: string; tool: string; input: Record<string, unknown>; text?: string }
 
-function engine(on: On, runs: string[][], history: Use[] = []): void {
+function engine(on: On, runs: string[][], history: Use[] = []): MockClock {
   mock.env(on, { TMPDIR: '/t' })
   mock.store(on)
-  mock.clock(on)
+  const clock = mock.clock(on)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: SID }))
@@ -73,6 +74,7 @@ function engine(on: On, runs: string[][], history: Use[] = []): void {
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
+  return clock
 }
 
 describe('parsers', () => {
@@ -98,7 +100,7 @@ describe('parsers', () => {
 
 test('the band counts the standup; done asks before it closes', async ($, on) => {
   const runs: string[][] = []
-  engine(on, runs)
+  const clock = engine(on, runs)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
 
   for (const surface of ['terminal', 'desktop'] as const) {
@@ -119,15 +121,17 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
   expect(runs.some(argv => argv[1] === 'done')).toBe(false)
   expect(await pane.find({ text: 'close [207]?' })).toBeDefined()
   await pane.press({ key: 'yes-207' })
+  await clock.advance(0)
   expect(runs).toContainEqual(['kb', 'done', '207'])
   await pane.press({ key: 'week-282' })
+  await clock.advance(0)
   expect(runs).toContainEqual(['kb', 'snooze', '282', '2026-10-14'])
   await pane.unmount()
 })
 
 test('the journal counts what the tools touched and writes the summary through kb', async ($, on) => {
   const runs: string[][] = []
-  engine(on, runs)
+  const clock = engine(on, runs)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Edit', file_path: '/p/src/a.py', old_string: 'a', new_string: 'b' })
   await $.tool.call({ tool: 'Bash', command: 'git -C src commit -m "[FIX] x: y"' })
@@ -135,6 +139,7 @@ test('the journal counts what the tools touched and writes the summary through k
   const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await band.find({ text: '1 files · 1 commits · 0 PRs · 0 kb writes' })).toBeDefined()
   await band.press({ key: 'kb-journal' })
+  await clock.advance(0)
   expect(runs).toContainEqual([
     'kb', 'session', 'close', '--id', SID, '--title', 'Mods for kb', '--body-file', `/t/kb-journal-${SID}.md`,
   ])
@@ -144,13 +149,14 @@ test('the journal counts what the tools touched and writes the summary through k
 
 test('open shows the record in its own pane; the legend names the circles', async ($, on) => {
   const runs: string[][] = []
-  engine(on, runs)
+  const clock = engine(on, runs)
   await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
 
   const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await pane.find({ text: '● loud' })).toBeDefined()
   expect(await pane.find({ text: '◉ scream' })).toBeDefined()
   await pane.press({ key: 'open-207' })
+  await clock.advance(0)
   expect(runs).toContainEqual(['kb', '--json', 'show', '207'])
   await pane.unmount()
 
@@ -165,7 +171,7 @@ test('open shows the record in its own pane; the legend names the circles', asyn
 
 test('the journal also counts what the transcript held before the module loaded', async ($, on) => {
   const runs: string[][] = []
-  engine(on, runs, [
+  const clock = engine(on, runs, [
     { tool_use_id: 'a', tool: 'Write', input: { file_path: '/p/x.md', content: 'x' } },
     { tool_use_id: 'b', tool: 'Bash', input: { command: 'git commit -m x' }, text: '[main 1234567] x' },
   ])

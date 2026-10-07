@@ -68,6 +68,19 @@ async function refreshToday($: EngineInterface): Promise<void> {
   }
 }
 
+// A press runs under the 10 s hook budget, and a render hook's $ in its closure does not stop that
+// clock while kb or the model answers: such work runs from a timer, and the press returns at once.
+function soon($: EngineInterface, work: () => Promise<unknown>): void {
+  $.clock.after(0, () => void work().catch(error => $.ui.toast(`kb: ${String(error)}`)))
+}
+
+function startJournal($: EngineInterface): void {
+  soon($, async () => {
+    const text = await writeJournal($)
+    $.ui.toast(text.split('\n')[0] ?? text)
+  })
+}
+
 async function openPane($: EngineInterface): Promise<void> {
   await $.ui.open({ id: PANE, title: 'kb today' })
 }
@@ -245,7 +258,7 @@ export const register: Register = on => {
             {j.isWriting ? (
               <Text dimColor>writing…</Text>
             ) : (
-              <Button key="kb-journal" label="write summary" onPress={() => writeJournal($)} />
+              <Button key="kb-journal" label="write summary" onPress={() => startJournal($)} />
             )}
           </Box>
         )}
@@ -275,17 +288,17 @@ export const register: Register = on => {
       ) : armedId === task.id ? (
         <Box flexDirection="row" columnGap={1} alignItems="center">
           <Text color="yellow">{`close [${task.id}]?`}</Text>
-          <Button key={`yes-${task.id}`} label="yes, close" onPress={() => act($, task, 'done')} />
+          <Button key={`yes-${task.id}`} label="yes, close" onPress={() => soon($, () => act($, task, 'done'))} />
           <Button key={`no-${task.id}`} label="no" onPress={() => update($, armed, () => null)} />
         </Box>
       ) : (
         <Box flexDirection="row" columnGap={1} alignItems="center">
-          <Button key={`open-${task.id}`} label="open" onPress={() => openNode($, task.id)} />
+          <Button key={`open-${task.id}`} label="open" onPress={() => soon($, () => openNode($, task.id))} />
           <Button key={`done-${task.id}`} label="done" onPress={() => update($, armed, () => task.id)} />
-          <Button key={`snooze-${task.id}`} label="snooze" onPress={() => act($, task, 'snooze')} />
-          <Button key={`week-${task.id}`} label="+7d" onPress={() => act($, task, 'week')} />
+          <Button key={`snooze-${task.id}`} label="snooze" onPress={() => soon($, () => act($, task, 'snooze'))} />
+          <Button key={`week-${task.id}`} label="+7d" onPress={() => soon($, () => act($, task, 'week'))} />
           {task.sched === 'window' && (
-            <Button key={`skip-${task.id}`} label="skip" onPress={() => act($, task, 'skip')} />
+            <Button key={`skip-${task.id}`} label="skip" onPress={() => soon($, () => act($, task, 'skip'))} />
           )}
         </Box>
       )
@@ -320,7 +333,7 @@ export const register: Register = on => {
             <Text bold>{`kb today ${data.date}`}</Text>
             <Text dimColor>{`${data.scope} · ${data.tasks.length - counts.quiet} on the standup · ${counts.quiet} quiet`}</Text>
           </Box>
-          <Button key="kb-refresh" label="refresh" onPress={() => refreshToday($)} />
+          <Button key="kb-refresh" label="refresh" onPress={() => soon($, () => refreshToday($))} />
         </Box>
         <Box key="kb-legend" flexDirection="row" columnGap={2} flexWrap="wrap">
           {LEVELS.map(style => (
@@ -377,14 +390,14 @@ export const register: Register = on => {
             (armedId === shown.id ? (
               <Box flexDirection="row" columnGap={1} alignItems="center">
                 <Text color="yellow">{`close [${shown.id}]?`}</Text>
-                <Button key="node-yes" label="yes, close" onPress={() => act($, shown, 'done')} />
+                <Button key="node-yes" label="yes, close" onPress={() => soon($, () => act($, shown, 'done'))} />
                 <Button key="node-no" label="no" onPress={() => update($, armed, () => null)} />
               </Box>
             ) : (
               <Box flexDirection="row" columnGap={1}>
                 <Button key="node-done" label="done" onPress={() => update($, armed, () => shown.id)} />
-                <Button key="node-snooze" label="snooze" onPress={() => act($, shown, 'snooze')} />
-                <Button key="node-week" label="+7d" onPress={() => act($, shown, 'week')} />
+                <Button key="node-snooze" label="snooze" onPress={() => soon($, () => act($, shown, 'snooze'))} />
+                <Button key="node-week" label="+7d" onPress={() => soon($, () => act($, shown, 'week'))} />
               </Box>
             ))}
         </Box>
@@ -411,7 +424,7 @@ export const register: Register = on => {
             <Text bold>{`Links · ${shown.links.length}`}</Text>
             {shown.links.map(link => (
               <Box flexDirection="row" columnGap={1} alignItems="center">
-                <Button key={`link-${link.id}`} label="open" onPress={() => openNode($, link.id)} />
+                <Button key={`link-${link.id}`} label="open" onPress={() => soon($, () => openNode($, link.id))} />
                 <Text dimColor>{`${link.type} ${link.direction}`}</Text>
                 <Text>{`[${link.id}] ${link.title}`}</Text>
               </Box>
