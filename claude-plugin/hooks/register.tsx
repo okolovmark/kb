@@ -44,6 +44,7 @@ const today = atom({ plugin: 'kb', key: 'today' } as const, null)
 const armed = atom({ plugin: 'kb', key: 'armed' } as const, null)
 const busy = atom({ plugin: 'kb', key: 'busy' } as const, null)
 const node = atom({ plugin: 'kb', key: 'node' } as const, null)
+const nodeLoading = atom({ plugin: 'kb', key: 'nodeLoading' } as const, null)
 const showQuiet = atom({ plugin: 'kb', key: 'showQuiet' } as const, false)
 const journal = atom({ plugin: 'kb', key: 'journal' } as const, EMPTY_JOURNAL)
 
@@ -84,19 +85,39 @@ function startJournal($: EngineInterface): void {
   })
 }
 
-async function openPane($: EngineInterface): Promise<void> {
-  await $.ui.open({ id: PANE, title: 'kb today' })
+// $.ui.open on a pane already open only retitles it: one open behind another tab is closed and opened
+// again, which brings it to the front
+async function showPane($: EngineInterface, id: string, title: string): Promise<void> {
+  const open = (await $.ui.panes()).find(pane => pane.id === id)
+  if (open !== undefined && !open.isShown) await $.ui.close({ id })
+  await $.ui.open({ id, title })
 }
 
+async function openPane($: EngineInterface): Promise<void> {
+  await showPane($, PANE, 'kb today')
+}
+
+// back from a record: its tab closes and the standup is in front again
+async function backToToday($: EngineInterface): Promise<void> {
+  await $.ui.close({ id: NODE_PANE })
+  await openPane($)
+}
+
+// the pane is in front at once, saying it loads; the record fills it when kb answers
 async function openNode($: EngineInterface, id: number): Promise<void> {
-  const run = await kb($, ['--json', 'show', String(id)])
-  const shown = run.exitCode === 0 ? parseNode(run.stdout) : null
-  if (shown === null) {
-    $.ui.toast(`kb show ${id} failed: ${failure(run)}`)
-    return
+  await update($, nodeLoading, () => id)
+  await showPane($, NODE_PANE, `kb [${id}]`)
+  try {
+    const run = await kb($, ['--json', 'show', String(id)])
+    const shown = run.exitCode === 0 ? parseNode(run.stdout) : null
+    if (shown === null) {
+      $.ui.toast(`kb show ${id} failed: ${failure(run)}`)
+      return
+    }
+    await update($, node, () => shown)
+  } finally {
+    await update($, nodeLoading, () => null)
   }
-  await update($, node, () => shown)
-  await $.ui.open({ id: NODE_PANE, title: `kb [${id}]` })
 }
 
 async function act($: EngineInterface, task: Target, verb: Verb): Promise<void> {
@@ -391,7 +412,9 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: NODE_PANE }, async ($, e) => {
     const { Box, Button, Markdown, Text } = $.ui.resolve(e)
     const shown = await read($, node)
+    const loading = await read($, nodeLoading)
     const armedId = await read($, armed)
+    if (loading !== null && shown?.id !== loading) return <Text dimColor>{`loading [${loading}]…`}</Text>
     if (shown === null) return <Text dimColor>kb: nothing opened yet</Text>
     const hasCards = e.surface !== 'terminal'
 
@@ -409,7 +432,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" rowGap={1}>
         <Box key="node-actions" flexDirection="row" columnGap={1} flexWrap="wrap" alignItems="center">
-          <Button key="node-today" label="← today" onPress={() => openPane($)} />
+          <Button key="node-today" label="← today" onPress={() => backToToday($)} />
           {isOpenTask &&
             (armedId === shown.id ? (
               <Box flexDirection="row" columnGap={1} alignItems="center">

@@ -56,7 +56,9 @@ const NODE = {
 
 type Use = { tool_use_id: string; tool: string; input: Record<string, unknown>; text?: string }
 
-function engine(on: On, runs: string[][], history: Use[] = []): MockClock {
+type Panes = { list: { id: string; isShown: boolean }[]; calls: string[] }
+
+function engine(on: On, runs: string[][], history: Use[] = [], panes: Panes = { list: [], calls: [] }): MockClock {
   mock.env(on, { TMPDIR: '/t' })
   mock.store(on)
   const clock = mock.clock(on)
@@ -65,7 +67,17 @@ function engine(on: On, runs: string[][], history: Use[] = []): MockClock {
   on('session.id', () => ({ value: SID }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('tool.register', (_$, e) => ({ value: { tool: `mcp__kb__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_$, e) => {
+    panes.calls.push(`open ${e.id}`)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_$, e) => {
+    panes.calls.push(`close ${e.id}`)
+    return { value: undefined }
+  })
+  on('ui.panes', () => ({
+    value: panes.list.map(pane => ({ ...pane, title: pane.id, isFocused: false, isPlaced: true })),
+  }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
   on('fs.write', () => ({ value: undefined }))
@@ -207,4 +219,25 @@ test('the journal also counts what the transcript held before the module loaded'
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await band.find({ text: '1 files · 1 commits · 0 PRs · 0 kb writes' })).toBeDefined()
   await band.unmount()
+})
+
+test('open brings a record tab hidden behind the standup to the front; today goes back', async ($, on) => {
+  const runs: string[][] = []
+  const panes: Panes = { list: [{ id: 'kb-today', isShown: true }, { id: 'kb-node', isShown: false }], calls: [] }
+  const clock = engine(on, runs, [], panes)
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  panes.calls.length = 0
+
+  const today = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await today.press({ key: 'open-207' })
+  await clock.advance(0)
+  expect(panes.calls.slice(-2)).toEqual(['close kb-node', 'open kb-node'])
+  await today.unmount()
+
+  panes.calls.length = 0
+  const opened = await $.ui.mount({ ...NODE, surface: 'desktop' })
+  await opened.press({ key: 'node-today' })
+  expect(panes.calls[0]).toBe('close kb-node')
+  expect(panes.calls.at(-1)).toBe('open kb-today')
+  await opened.unmount()
 })

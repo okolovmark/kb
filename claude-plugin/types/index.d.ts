@@ -57,6 +57,8 @@ declare module 'claude-code' {
       busy: number | null
       // the record the node pane shows; whether the pane lists the whisper tasks
       node: KbNode | null
+      // the record being fetched for the node pane, shown as loading meanwhile
+      nodeLoading: number | null
       showQuiet: boolean
       journal: Journal
     }
