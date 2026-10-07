@@ -43,6 +43,8 @@ export type Journal = {
   // a body reached `kb session close` (from the button, the tool, or Claude's own command)
   summarized: boolean
   title: string | null
+  // how many facts the last summary covered: the ones after it make the summary stale
+  mark: number
   isWriting: boolean
 }
 

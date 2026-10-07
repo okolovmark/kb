@@ -4,12 +4,15 @@ import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 import type { Journal, KbTask } from '../types'
 import {
   EMPTY_JOURNAL,
+  commitDirOf,
+  factCount,
   factsOf,
   hasWork,
   isEmpty,
   journalPrompt,
   mergeFacts,
   parseJournalReply,
+  sinceSummary,
 } from './journal'
 import { parseNode } from './node'
 import { LEVELS, countByLevel, levelStyle, parseToday, plusDays } from './today'
@@ -30,7 +33,7 @@ const TIPS: { scope: Tip; text: string }[] = [
   },
   {
     scope: 'kb-journal',
-    text: 'What this session touched, read from its tool calls: files edited, commits, PRs, kb writes. write summary = kb session close with a journal written from the transcript; do it at the end.',
+    text: 'What this session touched, read from its tool calls: files edited, commits, PRs, kb writes. write summary = kb session close with a journal written from the transcript; update summary rewrites it when the session went on after it. No row = the summary is up to date.',
   },
 ]
 
@@ -119,6 +122,15 @@ async function act($: EngineInterface, task: Target, verb: Verb): Promise<void> 
   }
 }
 
+// the commit a `git commit -q` made, which printed nothing to read it from
+async function quietCommit($: EngineInterface, command: string): Promise<string[]> {
+  const dir = commitDirOf(command, await $.session.cwd())
+  if (dir === null) return []
+  const run = await $.process.run(['git', '-C', dir, 'log', '-1', '--format=%h %s'], { timeoutMs: 5000 })
+  const line = run.stdout.trim()
+  return run.exitCode === 0 && line !== '' ? [`${line} (${dir.split('/').filter(Boolean).at(-1) ?? dir})`] : []
+}
+
 async function record($: EngineInterface, change: (current: Journal) => Journal): Promise<void> {
   await update($, journal, current => change(current))
   await $.store.set(`journal:${await $.session.id()}`, { ...(await read($, journal)), isWriting: false })
@@ -128,7 +140,12 @@ async function record($: EngineInterface, change: (current: Journal) => Journal)
 // loaded (a first load mid-session, a reload, a resume) counts as well.
 async function restoreJournal($: EngineInterface): Promise<void> {
   const saved = await $.store.get(`journal:${await $.session.id()}`)
-  if (saved !== undefined) await update($, journal, () => ({ ...EMPTY_JOURNAL, ...(saved as Journal) }))
+  if (saved !== undefined) {
+    const stored = { ...EMPTY_JOURNAL, ...(saved as Journal) }
+    // a journal stored before `mark` existed: its summary covered what it held then
+    const hasMark = typeof (saved as { mark?: unknown }).mark === 'number'
+    await update($, journal, () => (stored.summarized && !hasMark ? { ...stored, mark: factCount(stored) } : stored))
+  }
   const keys = (await $.store.keys()).filter(key => key.startsWith('journal:'))
   for (const key of keys.slice(0, Math.max(0, keys.length - JOURNALS_KEPT))) await $.store.delete(key)
 
@@ -160,7 +177,7 @@ async function writeJournal($: EngineInterface): Promise<string> {
       timeoutMs: 60_000,
     })
     if (run.exitCode !== 0) return `kb: session close failed: ${failure(run)}`
-    await record($, j => ({ ...j, summarized: true, title }))
+    await record($, j => ({ ...j, summarized: true, title, mark: factCount(current) }))
     return `kb: session journal written.\n\n${title}\n\n${body}`
   } finally {
     await update($, journal, j => ({ ...j, isWriting: false }))
@@ -208,10 +225,11 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
-    const facts = factsOf(
-      { tool: String(e.tool), input: e as unknown as Record<string, unknown>, text: ran.text },
-      await $.session.root(),
-    )
+    const input = e as unknown as Record<string, unknown>
+    const facts = factsOf({ tool: String(e.tool), input, text: ran.text }, await $.session.root())
+    if (String(e.tool) === 'Bash' && typeof input.command === 'string' && facts.commits.length === 0) {
+      facts.commits.push(...(await quietCommit($, input.command)))
+    }
     if (!isEmpty(facts)) {
       await record($, j => mergeFacts(j, facts))
       if (facts.kbWrites.length > 0) await refreshToday($)
@@ -262,9 +280,15 @@ export const register: Register = on => {
             )}
           </Box>
         )}
-        {j.summarized && j.title !== null && (
-          <Box key="kb-journal-done" flexDirection="row" columnGap={1}>
-            <Text dimColor>{`journal: ${j.title}`}</Text>
+        {sinceSummary(j) > 0 && (
+          <Box key="kb-journal-stale" flexDirection="row" columnGap={1} alignItems="center">
+            <Text dimColor hover={hint('kb-journal')}>journal</Text>
+            <Text color="yellow" hover={hint('kb-journal')}>{`${sinceSummary(j)} new since the summary`}</Text>
+            {j.isWriting ? (
+              <Text dimColor>writing…</Text>
+            ) : (
+              <Button key="kb-journal-update" label="update summary" onPress={() => startJournal($)} />
+            )}
           </Box>
         )}
       </Box>

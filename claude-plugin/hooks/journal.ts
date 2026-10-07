@@ -7,6 +7,7 @@ export const EMPTY_JOURNAL: Journal = {
   kbWrites: [],
   summarized: false,
   title: null,
+  mark: 0,
   isWriting: false,
 }
 
@@ -77,14 +78,38 @@ export function isEmpty(facts: Facts): boolean {
 }
 
 export function mergeFacts(journal: Journal, facts: Facts): Journal {
-  return {
+  const merged = {
     ...journal,
     files: add(journal.files, facts.files),
     commits: add(journal.commits, facts.commits),
     prs: add(journal.prs, facts.prs),
     kbWrites: add(journal.kbWrites, facts.kbWrites),
-    summarized: journal.summarized || facts.isSummary,
   }
+  // Claude's own `kb session close --body…` is a summary of everything so far
+  return facts.isSummary ? { ...merged, summarized: true, mark: factCount(merged) } : merged
+}
+
+export function factCount(journal: Pick<Journal, 'files' | 'commits' | 'prs' | 'kbWrites'>): number {
+  return journal.files.length + journal.commits.length + journal.prs.length + journal.kbWrites.length
+}
+
+// facts the session gathered after its last summary; 0 before any summary
+export function sinceSummary(journal: Journal): number {
+  return journal.summarized ? Math.max(0, factCount(journal) - journal.mark) : 0
+}
+
+const GIT_COMMIT_IN = /\bgit\b((?:\s+-[Cc]\s+\S+)*)\s+commit\b/
+
+// The repository a `git commit` ran in: its -C directory, else cwd; null for a variable path the
+// harness cannot expand. `git commit -q` prints no `[branch sha]` line, so the hook asks git log.
+export function commitDirOf(command: string, cwd: string): string | null {
+  const match = GIT_COMMIT_IN.exec(command)
+  if (match === null) return null
+  const raw = /-C\s+(\S+)/.exec(match[1] ?? '')?.[1]
+  if (raw === undefined) return cwd
+  const dir = raw.replace(/^["']|["']$/g, '')
+  if (dir.startsWith('$')) return null
+  return dir.startsWith('/') ? dir : `${cwd.replace(/\/+$/, '')}/${dir}`
 }
 
 export function hasWork(journal: Journal): boolean {

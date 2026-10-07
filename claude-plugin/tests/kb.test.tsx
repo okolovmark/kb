@@ -2,7 +2,16 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { MockClock } from 'claude-code/testing'
 
-import { commitsIn, kbWritesIn, parseJournalReply, prUrlsIn, writesSummary } from '../hooks/journal'
+import {
+  EMPTY_JOURNAL,
+  commitDirOf,
+  commitsIn,
+  kbWritesIn,
+  parseJournalReply,
+  prUrlsIn,
+  sinceSummary,
+  writesSummary,
+} from '../hooks/journal'
 import { parseNode } from '../hooks/node'
 import { parseToday, plusDays } from '../hooks/today'
 
@@ -66,10 +75,16 @@ function engine(on: On, runs: string[][], history: Use[] = []): MockClock {
   }))
   on('process.run', (_$, e) => {
     runs.push([...e.argv])
-    const stdout = e.argv[1] !== '--json' ? '' : e.argv[2] === 'show' ? SHOW : TODAY
+    const stdout =
+      e.argv[0] === 'git' ? 'beef123 [FIX] quiet commit\n' : e.argv[1] !== '--json' ? '' : e.argv[2] === 'show' ? SHOW : TODAY
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('tool.call', () => ({ result: { ok: true }, text: '[16.0 abc1234] [FIX] x: y\n 1 file changed' }))
+  // a commit with -q prints nothing; any other call answers with a commit line
+  on('tool.call', (_$, e) => ({
+    result: { ok: true },
+    text: String((e as { command?: unknown }).command ?? '').includes(' -q') ? '' : '[16.0 abc1234] [FIX] x: y\n 1 file changed',
+  }))
+  on('session.cwd', () => ({ value: ROOT }))
   on('ui.render', ($, e) => {
     const { Box } = $.ui.resolve(e)
     return <Box />
@@ -86,6 +101,14 @@ describe('parsers', () => {
     expect(kbWritesIn('KB_SESSION=abc kb session note "n"')).toEqual(['kb session note "n"'])
     expect(writesSummary('kb session close --body-file /tmp/b.md')).toBe(true)
     expect(writesSummary('kb session close --id x')).toBe(false)
+    expect(commitDirOf('git -C /r/kb commit -q -m x', '/p')).toBe('/r/kb')
+    expect(commitDirOf('git add -A && git commit -m x', '/p')).toBe('/p')
+    expect(commitDirOf('git -C "$PROJ" commit -m x', '/p')).toBe(null)
+    expect(commitDirOf('git status', '/p')).toBe(null)
+    const done = { ...EMPTY_JOURNAL, files: ['a', 'b'], summarized: true, mark: 2 }
+    expect(sinceSummary(done)).toBe(0)
+    expect(sinceSummary({ ...done, files: ['a', 'b', 'c'] })).toBe(1)
+    expect(sinceSummary({ ...EMPTY_JOURNAL, files: ['a'] })).toBe(0)
   })
 
   test('today, dates and the reply', async () => {
@@ -143,7 +166,12 @@ test('the journal counts what the tools touched and writes the summary through k
   expect(runs).toContainEqual([
     'kb', 'session', 'close', '--id', SID, '--title', 'Mods for kb', '--body-file', `/t/kb-journal-${SID}.md`,
   ])
-  expect(await band.find({ text: 'journal: Mods for kb' })).toBeDefined()
+  // an up-to-date summary needs no row; work after it makes the summary stale
+  expect(await band.find({ key: 'kb-journal-row' })).toBeUndefined()
+  expect(await band.find({ key: 'kb-journal-stale' })).toBeUndefined()
+  await $.tool.call({ tool: 'Bash', command: 'git -C /r/kb commit -q -m "[FIX] quiet commit"' })
+  expect(await band.find({ text: '1 new since the summary' })).toBeDefined()
+  expect(await band.find({ key: 'kb-journal-update' })).toBeDefined()
   await band.unmount()
 })
 
