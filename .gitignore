@@ -6,3 +6,4 @@ result-*
 .pytest_cache/
 .ruff_cache/
 .direnv/
+claude-plugin/.claude-plugin/types/

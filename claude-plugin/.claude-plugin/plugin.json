@@ -1,0 +1,7 @@
+{
+  "name": "kb",
+  "version": "0.1.0",
+  "description": "kb in Claude Code: today's standup as a pane with done/snooze buttons, and a session journal written from what the session actually touched",
+  "author": { "name": "Mark Okolov" },
+  "types": "./types/index.d.ts"
+}

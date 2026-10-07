@@ -33,6 +33,26 @@ into the `kb` and `kb-setup` wrappers as `KB_NEO4J_PACKAGE` and written into the
 Neo4j Browser: `http://127.0.0.1:7474`, user `neo4j`, password from `neo4j-auth`.
 A user service stops with the last login session unless `loginctl enable-linger $USER`.
 
+## Claude Code plugin
+
+`claude-plugin/` is a function-hooks plugin (Claude Code mods, early access), installed with the
+package as `~/.nix-profile/share/kb/claude-plugin`. Claude Code loads it from the `env` block of
+`~/.claude/settings.json`:
+
+```json
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/.nix-profile/share/kb/claude-plugin" } }
+```
+
+| Piece | What it does |
+| --- | --- |
+| band above the prompt | today's counts (loud, normal, due, quiet, sessions without summary); `open` opens the pane |
+| pane, `/kb` | `kb --json today` as rows with `done` (asks yes/no), `snooze` (tomorrow), `+7d`, `skip` (window tasks) |
+| journal | files from Edit/Write, commits from `git commit` output, PR urls from `gh pr create`, kb writes from Bash, subagents included; a `write summary` button in the band |
+| `/journal`, tool `mcp__kb__write_journal` | one prompt-cached request over the session's own transcript, then `kb session close --title … --body-file …` |
+
+kb runs in the session's project root, so the scope is the cwd scope. Tests: `claude plugin test
+claude-plugin`.
+
 ## Checking on it
 
 `kb status` prints the unit state, bolt, the schema, the counter and the versions. It exits 1 when
