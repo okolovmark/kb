@@ -54,8 +54,8 @@ from the next Claude Code session.
 | --- | --- |
 | band above the prompt | today's counts (loud, normal, due, quiet, sessions without summary); `open` opens the pane |
 | pane, `/kb` | `kb --json next` grouped by level, whisper folded; each task a card with `open`, `done` (asks yes/no), `snooze` (tomorrow), `+7d`, `skip` (window tasks); `open` shows the record in the same pane (body, links to follow, events) and `← today` goes back; `/kb <id>` opens a record |
-| journal | files from Edit/Write, commits from `git commit` output (`git log -1` after a quiet `-q` one), PR urls from `gh pr create`, kb writes from Bash, subagents included; the band shows `write summary` before the first summary and `N new since the summary` with `update summary` once the session went on after it, nothing while the summary is up to date |
-| `/journal`, tool `mcp__kb__write_journal` | one prompt-cached request over the session's own transcript, then `kb session close --title … --body-file …` |
+| session row | this session in kb: `not closed` with what it touched (files from Edit/Write, commits from `git commit` output or `git log -1` after a quiet one, PR urls from `gh pr create`, kb writes from Bash, subagents included), `✓ closed`, or `closed` with `N new since closing`; `close session` sends Claude the full close as the person's words: open threads and lessons into kb, the repos checked, the journal written, the session archived when nothing is left to ask |
+| `/journal`, tool `mcp__kb__write_journal` | the journal alone: one prompt-cached request over the session's own transcript, then `kb session close --title … --body-file …` |
 
 kb runs in the session's project root, so the scope is the cwd scope. Tests: `claude plugin test
 claude-plugin`.

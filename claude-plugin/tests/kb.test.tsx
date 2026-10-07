@@ -47,11 +47,19 @@ const SHOW = JSON.stringify({
   links: [{ type: 'TOUCHED', direction: '<-', id: 592, title: 'requests' }],
   events: [{ kind: 'shown', at: '2026-10-07T02:33:32+00:00', note: null }],
 })
+type Submitted = { text: string; origin: unknown }
+
 type Use = { tool_use_id: string; tool: string; input: Record<string, unknown>; text?: string }
 
 type Panes = { list: { id: string; isShown: boolean }[]; calls: string[] }
 
-function engine(on: On, runs: string[][], history: Use[] = [], panes: Panes = { list: [], calls: [] }): MockClock {
+function engine(
+  on: On,
+  runs: string[][],
+  history: Use[] = [],
+  panes: Panes = { list: [], calls: [] },
+  submitted: Submitted[] = [],
+): MockClock {
   mock.env(on, { TMPDIR: '/t' })
   mock.store(on)
   const clock = mock.clock(on)
@@ -72,6 +80,10 @@ function engine(on: On, runs: string[][], history: Use[] = [], panes: Panes = { 
     value: panes.list.map(pane => ({ ...pane, title: pane.id, isFocused: false, isPlaced: true })),
   }))
   on('ui.toast', () => ({ value: undefined }))
+  on('prompt.submit', (_$, e) => {
+    submitted.push({ text: e.text, origin: e.origin })
+    return { text: e.text }
+  })
   on('ui.log', () => ({ value: undefined }))
   on('fs.write', () => ({ value: undefined }))
   on('session.messages', () => ({ value: [{ role: 'assistant', text: '', toolUses: history }] }))
@@ -160,26 +172,35 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
   await pane.unmount()
 })
 
-test('the journal counts what the tools touched and writes the summary through kb', async ($, on) => {
+test('close session asks Claude for the full close; the row tracks closed and what came after', async ($, on) => {
   const runs: string[][] = []
-  const clock = engine(on, runs)
+  const submitted: Submitted[] = []
+  engine(on, runs, [], { list: [], calls: [] }, submitted)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Edit', file_path: '/p/src/a.py', old_string: 'a', new_string: 'b' })
   await $.tool.call({ tool: 'Bash', command: 'git -C src commit -m "[FIX] x: y"' })
 
   const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await band.find({ text: 'not closed' })).toBeDefined()
   expect(await band.find({ text: '1 files · 1 commits · 0 PRs · 0 kb writes' })).toBeDefined()
-  await band.press({ key: 'kb-journal' })
-  await clock.advance(0)
+  await band.press({ key: 'kb-close' })
+  expect(submitted.length).toBe(1)
+  expect(submitted[0]?.origin).toMatchObject({ kind: 'plugin', asUser: true })
+  expect(submitted[0]?.text).toContain('mcp__kb__write_journal')
+  expect(submitted[0]?.text).toContain('--scope proj')
+  expect(submitted[0]?.text).toContain('archive_session')
+  expect(await band.find({ text: 'closing…' })).toBeDefined()
+
+  // the close calls write_journal: the session reads closed, and work after it shows as new
+  await $.tool.call({ tool: 'mcp__kb__write_journal' })
   expect(runs).toContainEqual([
     'kb', 'session', 'close', '--id', SID, '--title', 'Mods for kb', '--body-file', `/t/kb-journal-${SID}.md`,
   ])
-  // an up-to-date summary needs no row; work after it makes the summary stale
-  expect(await band.find({ key: 'kb-journal-row' })).toBeUndefined()
-  expect(await band.find({ key: 'kb-journal-stale' })).toBeUndefined()
+  expect(await band.find({ text: '✓ closed' })).toBeDefined()
+  expect(await band.find({ key: 'kb-close' })).toBeUndefined()
   await $.tool.call({ tool: 'Bash', command: 'git -C /r/kb commit -q -m "[FIX] quiet commit"' })
-  expect(await band.find({ text: '1 new since the summary' })).toBeDefined()
-  expect(await band.find({ key: 'kb-journal-update' })).toBeDefined()
+  expect(await band.find({ text: '1 new since closing' })).toBeDefined()
+  expect(await band.find({ key: 'kb-close' })).toBeDefined()
   await band.unmount()
 })
 

@@ -46,6 +46,8 @@ export type Journal = {
   // how many facts the last summary covered: the ones after it make the summary stale
   mark: number
   isWriting: boolean
+  // close session was pressed and the close prompt is queued or running, until the journal lands
+  isClosing: boolean
 }
 
 declare module 'claude-code' {

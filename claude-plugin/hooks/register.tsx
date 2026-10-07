@@ -4,10 +4,10 @@ import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 import type { Journal, KbTask } from '../types'
 import {
   EMPTY_JOURNAL,
+  closePrompt,
   commitDirOf,
   factCount,
   factsOf,
-  hasWork,
   isEmpty,
   journalPrompt,
   mergeFacts,
@@ -32,7 +32,7 @@ const TIPS: { scope: Tip; text: string }[] = [
   },
   {
     scope: 'kb-journal',
-    text: 'What this session touched, read from its tool calls: files edited, commits, PRs, kb writes. write summary = kb session close with a journal written from the transcript; update summary rewrites it when the session went on after it. No row = the summary is up to date.',
+    text: "This session in kb: not closed, closed, or closed with N new facts (files edited, commits, PRs, kb writes) since. close session asks Claude for the full close: open threads and lessons into kb, the repos checked, the journal written, the session archived when Claude has nothing left to ask. /journal writes only the journal.",
   },
 ]
 
@@ -78,11 +78,12 @@ function soon($: EngineInterface, work: () => Promise<unknown>): void {
   $.clock.after(0, () => void work().catch(error => $.ui.toast(`kb: ${String(error)}`)))
 }
 
-function startJournal($: EngineInterface): void {
-  soon($, async () => {
-    const text = await writeJournal($)
-    $.ui.toast(text.split('\n')[0] ?? text)
-  })
+// close session: the full close, done by Claude on the person's press; the band says closing until the
+// journal lands. Not awaited, so the press returns while the session is still busy.
+async function requestClose($: EngineInterface): Promise<void> {
+  await update($, journal, j => ({ ...j, isClosing: true }))
+  const scope = (await read($, today))?.scope ?? ''
+  void $.prompt.submit({ text: closePrompt(scope, await $.session.id()), asUser: true })
 }
 
 // $.ui.open on a pane already open only retitles it: one open behind another tab is closed and opened
@@ -168,7 +169,8 @@ async function record($: EngineInterface, change: (current: Journal) => Journal)
 async function restoreJournal($: EngineInterface): Promise<void> {
   const saved = await $.store.get(`journal:${await $.session.id()}`)
   if (saved !== undefined) {
-    const stored = { ...EMPTY_JOURNAL, ...(saved as Journal) }
+    // a close that was running when the module last unloaded is not running now
+    const stored = { ...EMPTY_JOURNAL, ...(saved as Journal), isClosing: false }
     // a journal stored before `mark` existed: its summary covered what it held then
     const hasMark = typeof (saved as { mark?: unknown }).mark === 'number'
     await update($, journal, () => (stored.summarized && !hasMark ? { ...stored, mark: factCount(stored) } : stored))
@@ -209,7 +211,7 @@ async function writeJournal($: EngineInterface): Promise<string> {
       timeoutMs: 60_000,
     })
     if (run.exitCode !== 0) return `kb: session close failed: ${failure(run)}`
-    await record($, j => ({ ...j, summarized: true, title, mark: factCount(current) }))
+    await record($, j => ({ ...j, summarized: true, isClosing: false, title, mark: factCount(current) }))
     return `kb: session journal written.\n\n${title}\n\n${body}`
   } finally {
     await update($, journal, j => ({ ...j, isWriting: false }))
@@ -301,29 +303,25 @@ export const register: Register = on => {
             <Button key="kb-open" label="open" onPress={() => openPane($)} />
           </Box>
         )}
-        {hasWork(j) && !j.summarized && (
-          <Box key="kb-journal-row" flexDirection="row" columnGap={1} alignItems="center">
-            <Text dimColor hover={hint('kb-journal')}>journal</Text>
-            <Text hover={hint('kb-journal')}>{`${j.files.length} files · ${j.commits.length} commits · ${j.prs.length} PRs · ${j.kbWrites.length} kb writes`}</Text>
-            <Text color="yellow" hover={hint('kb-journal')}>no summary</Text>
-            {j.isWriting ? (
-              <Text dimColor>writing…</Text>
+        <Box key="kb-session-row" flexDirection="row" columnGap={1} alignItems="center">
+          <Text dimColor hover={hint('kb-journal')}>session</Text>
+          {!j.summarized && <Text color="yellow" hover={hint('kb-journal')}>not closed</Text>}
+          {!j.summarized && (
+            <Text dimColor hover={hint('kb-journal')}>{`${j.files.length} files · ${j.commits.length} commits · ${j.prs.length} PRs · ${j.kbWrites.length} kb writes`}</Text>
+          )}
+          {j.summarized && (
+            <Text color="green" hover={hint('kb-journal')}>
+              {sinceSummary(j) > 0 ? 'closed' : '✓ closed'}
+            </Text>
+          )}
+          {sinceSummary(j) > 0 && <Text color="yellow" hover={hint('kb-journal')}>{`${sinceSummary(j)} new since closing`}</Text>}
+          {(!j.summarized || sinceSummary(j) > 0) &&
+            (j.isClosing || j.isWriting ? (
+              <Text dimColor>closing…</Text>
             ) : (
-              <Button key="kb-journal" label="write summary" onPress={() => startJournal($)} />
-            )}
-          </Box>
-        )}
-        {sinceSummary(j) > 0 && (
-          <Box key="kb-journal-stale" flexDirection="row" columnGap={1} alignItems="center">
-            <Text dimColor hover={hint('kb-journal')}>journal</Text>
-            <Text color="yellow" hover={hint('kb-journal')}>{`${sinceSummary(j)} new since the summary`}</Text>
-            {j.isWriting ? (
-              <Text dimColor>writing…</Text>
-            ) : (
-              <Button key="kb-journal-update" label="update summary" onPress={() => startJournal($)} />
-            )}
-          </Box>
-        )}
+              <Button key="kb-close" label="close session" onPress={() => requestClose($)} />
+            ))}
+        </Box>
       </Box>
     )
   })
