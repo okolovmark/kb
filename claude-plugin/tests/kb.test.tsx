@@ -189,6 +189,7 @@ test('close session asks Claude for the full close; the row tracks closed and wh
   expect(submitted[0]?.text).toContain('mcp__kb__write_journal')
   expect(submitted[0]?.text).toContain('--scope proj')
   expect(submitted[0]?.text).toContain('archive_session')
+  expect(submitted[0]?.text).toContain('decisions waiting on me included')
   expect(await band.find({ text: 'closing…' })).toBeDefined()
 
   // the close calls write_journal: the session reads closed, and work after it shows as new

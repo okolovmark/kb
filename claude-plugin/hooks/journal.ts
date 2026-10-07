@@ -97,12 +97,12 @@ export function closePrompt(scope: string, sessionId: string): string {
   return [
     'Close this session: I pressed close session in the kb band. Do the whole close in this turn, in this order, and start no new work.',
     '',
-    `1. Open threads. Every unfinished item, follow-up or decision still pending from this session becomes a kb record: a new task (${add}) or an append to the existing record. Nothing stays only in the chat.`,
+    `1. Open threads. Every unfinished item or follow-up from this session becomes a kb record: a new task (${add}) or an append to the existing record. Nothing stays only in the chat. A decision only I can make is not a task you file on my behalf: it is a question for step 5.`,
     '2. Lessons. What this session taught that a later session needs (a gotcha, a rule I gave, a fact about this environment) goes into kb as a note, feedback or reference; update an existing record rather than add a duplicate.',
     '3. Repositories. Check every repository this session changed: git status, unpushed commits, open PRs. Commit and push only what I already asked to ship; list anything left uncommitted or unpushed and do not act on it.',
     `4. Journal. Call mcp__kb__write_journal: it writes the journal from the transcript and the recorded facts and closes the kb session record. If it fails, write the journal yourself with kb session close --id ${sessionId} --title "<title>" --body-file <file>.`,
-    '5. Report to me, in my language: what went where (record ids), what is left open, and any question you still have for me.',
-    '6. Archive. If you have no question left for me, archive this session as the very last call: mcp__ccd_session_mgmt__archive_session with session_id "self" and reason "session closed". If you do have a question, ask it and do not archive. If the archive is refused (live background work, the session open on screen), say so in one line.',
+    '5. Report to me, in my language: what went where (record ids), what is left open, and every question you still have for me, decisions waiting on me included.',
+    '6. Archive. Only when step 5 has no question and no decision waiting on me, archive this session as the very last call: mcp__ccd_session_mgmt__archive_session with session_id "self" and reason "session closed". Otherwise ask and do not archive: I answer, then press close session again. If the archive is refused (live background work, the session open on screen), say so in one line.',
   ].join('\n')
 }
 
