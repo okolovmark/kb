@@ -230,8 +230,11 @@ test('open brings a record tab hidden behind the standup to the front; today goe
 
   const today = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await today.press({ key: 'open-207' })
-  await clock.advance(0)
+  // the pane opens inside the press, before any timer runs: a timer's open would count as unasked
   expect(panes.calls.slice(-2)).toEqual(['close kb-node', 'open kb-node'])
+  expect(runs).not.toContainEqual(['kb', '--json', 'show', '207'])
+  await clock.advance(0)
+  expect(runs).toContainEqual(['kb', '--json', 'show', '207'])
   await today.unmount()
 
   panes.calls.length = 0

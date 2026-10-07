@@ -103,10 +103,16 @@ async function backToToday($: EngineInterface): Promise<void> {
   await openPane($)
 }
 
-// the pane is in front at once, saying it loads; the record fills it when kb answers
+// Called inside the press: a pane the person's press opens is placed at any width, while one a timer
+// opens counts as unasked and may wait undrawn. So the pane opens here, saying it loads, and only the
+// kb call goes to a timer.
 async function openNode($: EngineInterface, id: number): Promise<void> {
   await update($, nodeLoading, () => id)
   await showPane($, NODE_PANE, `kb [${id}]`)
+  soon($, () => fetchNode($, id))
+}
+
+async function fetchNode($: EngineInterface, id: number): Promise<void> {
   try {
     const run = await kb($, ['--json', 'show', String(id)])
     const shown = run.exitCode === 0 ? parseNode(run.stdout) : null
@@ -137,7 +143,7 @@ async function act($: EngineInterface, task: Target, verb: Verb): Promise<void> 
     const run = await kb($, args)
     $.ui.toast(run.exitCode === 0 ? `kb ${args.join(' ')}` : `kb ${args[0]} [${id}] failed: ${failure(run)}`)
     await refreshToday($)
-    if ((await read($, node))?.id === task.id) await openNode($, task.id)
+    if ((await read($, node))?.id === task.id) await fetchNode($, task.id)
   } finally {
     await update($, busy, () => null)
   }
@@ -338,7 +344,7 @@ export const register: Register = on => {
         </Box>
       ) : (
         <Box flexDirection="row" columnGap={1} alignItems="center">
-          <Button key={`open-${task.id}`} label="open" onPress={() => soon($, () => openNode($, task.id))} />
+          <Button key={`open-${task.id}`} label="open" onPress={() => openNode($, task.id)} />
           <Button key={`done-${task.id}`} label="done" onPress={() => update($, armed, () => task.id)} />
           <Button key={`snooze-${task.id}`} label="snooze" onPress={() => soon($, () => act($, task, 'snooze'))} />
           <Button key={`week-${task.id}`} label="+7d" onPress={() => soon($, () => act($, task, 'week'))} />
@@ -471,7 +477,7 @@ export const register: Register = on => {
             <Text bold>{`Links · ${shown.links.length}`}</Text>
             {shown.links.map(link => (
               <Box flexDirection="row" columnGap={1} alignItems="center">
-                <Button key={`link-${link.id}`} label="open" onPress={() => soon($, () => openNode($, link.id))} />
+                <Button key={`link-${link.id}`} label="open" onPress={() => openNode($, link.id)} />
                 <Text dimColor>{`${link.type} ${link.direction}`}</Text>
                 <Text>{`[${link.id}] ${link.title}`}</Text>
               </Box>
