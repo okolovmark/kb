@@ -151,7 +151,8 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
     expect(await band.find({ text: '1 loud' })).toBeDefined()
     expect(await band.find({ text: '1 due' })).toBeDefined()
     expect(await band.find({ text: '1 quiet' })).toBeDefined()
-    expect(await band.find({ key: 'tip-kb-standup' })).toBeDefined()
+    // no tips: nothing reveals on hover, nothing underlines
+    expect(JSON.stringify(await band.drawn())).not.toMatch(/"hover"|"display":"none"/)
     await band.unmount()
   }
 

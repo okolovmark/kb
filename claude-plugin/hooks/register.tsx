@@ -22,20 +22,6 @@ const REFRESH_MS = 5 * 60_000
 const JOURNALS_KEPT = 30
 const WIDE = 110
 
-type Tip = 'kb-standup' | 'kb-journal'
-
-// what each band row means; shown above the rows while the pointer is on the row
-const TIPS: { scope: Tip; text: string }[] = [
-  {
-    scope: 'kb-standup',
-    text: "kb's open tasks in this project by urgency: loud and normal are the standup, quiet = whisper (aging, not urgent yet), due = has a deadline. open = the pane with all of them.",
-  },
-  {
-    scope: 'kb-journal',
-    text: "This session in kb: not closed, closed, or closed with N new facts (files edited, commits, PRs, kb writes) since. close session asks Claude for the full close: open threads and lessons into kb, the repos checked, the journal written, the session archived when Claude has nothing left to ask. /journal writes only the journal.",
-  },
-]
-
 type Verb = 'done' | 'snooze' | 'week' | 'skip'
 type Target = { id: number; sched: string }
 
@@ -279,42 +265,31 @@ export const register: Register = on => {
     const data = await read($, today)
     const j = await read($, journal)
     const counts = data === null ? null : countByLevel(data.tasks)
-    // a row joins its tip's hover group: pointing at it underlines it and reveals the tip
-    const hint = (scope: Tip) => ({ scope, underline: true })
 
     return (
       <Box flexDirection="column">
-        {/* every band plugin draws its tips before the plugins beneath it and its rows after them: all tips sit on top */}
-        {TIPS.map(tip => (
-          <Box key={`tip-${tip.scope}`} display="none" hover={{ scope: tip.scope, display: 'flex' }} flexDirection="row" columnGap={1}>
-            <Text color="cyan">ⓘ</Text>
-            <Text dimColor>{tip.text}</Text>
-          </Box>
-        ))}
         {below}
         {counts !== null && (
           <Box key="kb-today-row" flexDirection="row" columnGap={1} alignItems="center">
-            <Text dimColor hover={hint('kb-standup')}>kb</Text>
-            {counts.loud > 0 && <Text color="red" hover={hint('kb-standup')}>{`${counts.loud} loud`}</Text>}
-            <Text color="yellow" hover={hint('kb-standup')}>{`${counts.normal} normal`}</Text>
-            {counts.due > 0 && <Text bold hover={hint('kb-standup')}>{`${counts.due} due`}</Text>}
-            <Text dimColor hover={hint('kb-standup')}>{`${counts.quiet} quiet`}</Text>
+            <Text dimColor>kb</Text>
+            {counts.loud > 0 && <Text color="red">{`${counts.loud} loud`}</Text>}
+            <Text color="yellow">{`${counts.normal} normal`}</Text>
+            {counts.due > 0 && <Text bold>{`${counts.due} due`}</Text>}
+            <Text dimColor>{`${counts.quiet} quiet`}</Text>
             {(data?.noSummary ?? 0) > 0 && <Text color="yellow">{`${data?.noSummary} without summary`}</Text>}
             <Button key="kb-open" label="open" onPress={() => openPane($)} />
           </Box>
         )}
         <Box key="kb-session-row" flexDirection="row" columnGap={1} alignItems="center">
-          <Text dimColor hover={hint('kb-journal')}>session</Text>
-          {!j.summarized && <Text color="yellow" hover={hint('kb-journal')}>not closed</Text>}
+          <Text dimColor>session</Text>
+          {!j.summarized && <Text color="yellow">not closed</Text>}
           {!j.summarized && (
-            <Text dimColor hover={hint('kb-journal')}>{`${j.files.length} files · ${j.commits.length} commits · ${j.prs.length} PRs · ${j.kbWrites.length} kb writes`}</Text>
+            <Text dimColor>{`${j.files.length} files · ${j.commits.length} commits · ${j.prs.length} PRs · ${j.kbWrites.length} kb writes`}</Text>
           )}
           {j.summarized && (
-            <Text color="green" hover={hint('kb-journal')}>
-              {sinceSummary(j) > 0 ? 'closed' : '✓ closed'}
-            </Text>
+            <Text color="green">{sinceSummary(j) > 0 ? 'closed' : '✓ closed'}</Text>
           )}
-          {sinceSummary(j) > 0 && <Text color="yellow" hover={hint('kb-journal')}>{`${sinceSummary(j)} new since closing`}</Text>}
+          {sinceSummary(j) > 0 && <Text color="yellow">{`${sinceSummary(j)} new since closing`}</Text>}
           {(!j.summarized || sinceSummary(j) > 0) &&
             (j.isClosing || j.isWriting ? (
               <Text dimColor>closing…</Text>
