@@ -18,6 +18,8 @@ import { parseNode } from './node'
 import { LEVELS, countByLevel, levelStyle, parseToday, plusDays } from './today'
 
 const PANE = 'kb-today'
+// the band row's and the pane's name: it lists tasks alone, not the notes and sessions kb also holds
+const TITLE = 'my todo'
 const REFRESH_MS = 5 * 60_000
 const JOURNALS_KEPT = 30
 const WIDE = 110
@@ -83,7 +85,7 @@ async function showPane($: EngineInterface, id: string, title: string): Promise<
 // the band's open and /kb: the pane in front, on the list
 async function openPane($: EngineInterface): Promise<void> {
   await update($, view, () => null)
-  await showPane($, PANE, 'kb')
+  await showPane($, PANE, TITLE)
 }
 
 // One pane, two views. Opening a record or going back is a state change the pane redraws on at once:
@@ -230,7 +232,7 @@ export const register: Register = on => {
     const id = Number(e.args.trim())
     if (Number.isInteger(id) && id > 0) {
       await openNode($, id)
-      await showPane($, PANE, 'kb')
+      await showPane($, PANE, TITLE)
       return { text: `kb: [${id}] opened.` }
     }
     await refreshToday($)
@@ -271,7 +273,7 @@ export const register: Register = on => {
         {below}
         {counts !== null && (
           <Box key="kb-today-row" flexDirection="row" columnGap={1} alignItems="center">
-            <Text dimColor>kb</Text>
+            <Text dimColor>{TITLE}</Text>
             {counts.loud > 0 && <Text color="red">{`${counts.loud} loud`}</Text>}
             <Text color="yellow">{`${counts.normal} normal`}</Text>
             {counts.due > 0 && <Text bold>{`${counts.due} due`}</Text>}
@@ -362,7 +364,7 @@ export const register: Register = on => {
       <Box flexDirection="column" rowGap={1}>
         <Box key="kb-head" flexDirection="row" columnGap={1} justifyContent="space-between" alignItems="center">
           <Box flexDirection="column">
-            <Text bold>{`kb today ${data.date}`}</Text>
+            <Text bold>{`${TITLE} ${data.date}`}</Text>
             <Text dimColor>{`${data.scope} · ${data.tasks.length - counts.quiet} on the standup · ${counts.quiet} quiet`}</Text>
           </Box>
           <Button key="kb-refresh" label="refresh" onPress={() => soon($, () => refreshToday($))} />
