@@ -14,10 +14,12 @@ from kb.db import connect, schema_present
 from kb.paths import LOG_CONFIGS, UNIT_NAME, Paths
 from kb.runner import RecordingRunner
 from kb.setup import (
+    antigravity_plugin_dir,
     claude_plugin_dir,
     conf_settings,
     ensure_auth,
     install,
+    install_antigravity_plugin,
     main,
     package_conf_dir,
     package_default_conf,
@@ -370,3 +372,36 @@ def test_register_claude_plugin_leaves_a_missing_claude_or_a_broken_file_alone(
         settings.write_text(broken)
         assert register_claude_plugin(tmp_path, PROFILE_PLUGIN).startswith("skipped:")
         assert settings.read_text() == broken
+
+
+
+def _agy_plugin(folder: Path) -> Path:
+    (folder / "sidecars" / "panel").mkdir(parents=True)
+    (folder / "plugin.json").write_text('{"name": "kb"}')
+    (folder / "sidecars" / "panel" / "server.mjs").write_text("// server\n")
+    return folder
+
+
+def test_antigravity_plugin_dir_prefers_the_profile_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("KB_ANTIGRAVITY_PLUGIN_DIR", raising=False)
+    assert antigravity_plugin_dir(tmp_path) is None
+    own = _agy_plugin(tmp_path / "store" / "share" / "kb" / "antigravity-plugin")
+    monkeypatch.setenv("KB_ANTIGRAVITY_PLUGIN_DIR", str(own))
+    assert antigravity_plugin_dir(tmp_path) == own
+    prof = _agy_plugin(tmp_path / ".nix-profile" / "share" / "kb" / "antigravity-plugin")
+    assert antigravity_plugin_dir(tmp_path) == prof
+
+
+def test_install_antigravity_plugin_syncs_and_respects_dry_run(tmp_path: Path) -> None:
+    src = _agy_plugin(tmp_path / "src-plugin")
+    assert install_antigravity_plugin(tmp_path, src).startswith("skipped: no ~/.gemini/antigravity")
+    (tmp_path / ".gemini" / "antigravity").mkdir(parents=True)
+    dst = tmp_path / ".gemini" / "config" / "plugins" / "kb"
+    assert install_antigravity_plugin(tmp_path, src, dry_run=True).startswith("would install")
+    assert not dst.exists()
+    assert install_antigravity_plugin(tmp_path, src).startswith("installed")
+    assert (dst / "plugin.json").read_text() == '{"name": "kb"}'
+    assert (dst / "sidecars" / "panel" / "server.mjs").read_text() == "// server\n"
+    assert install_antigravity_plugin(tmp_path, src).startswith("up to date")
