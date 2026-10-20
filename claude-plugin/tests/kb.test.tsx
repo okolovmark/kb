@@ -148,6 +148,7 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({ ...BAND, surface })
+    expect(await band.find({ text: 'my todo' })).toBeDefined()
     expect(await band.find({ text: '1 loud' })).toBeDefined()
     expect(await band.find({ text: '1 due' })).toBeDefined()
     expect(await band.find({ text: '1 quiet' })).toBeDefined()
@@ -158,6 +159,7 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(runs).toContainEqual(['kb', '--json', 'next'])
+  expect(await pane.find({ text: /^my todo \d{4}-\d{2}-\d{2}$/ })).toBeDefined()
   expect(await pane.find({ key: 'task-742' })).toBeUndefined()
   await pane.press({ key: 'kb-quiet' })
   expect(await pane.find({ key: 'task-742' })).toBeDefined()
