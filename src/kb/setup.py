@@ -26,6 +26,7 @@ RUNNING_STATES = frozenset({"active", "activating"})
 PLUGIN_ENV = "CLAUDE_CODE_PLUGIN_DIRS"
 PLUGIN_TAIL = "share/kb/claude-plugin"
 PROFILE_PLUGIN = "~/.nix-profile/" + PLUGIN_TAIL
+ANTIGRAVITY_PLUGIN_TAIL = "share/kb/antigravity-plugin"
 
 
 def package_conf_dir(pkg: Path) -> Path:
@@ -203,6 +204,37 @@ def register_claude_plugin(home: Path, plugin_dir: str, *, dry_run: bool = False
     return f"{'would add' if dry_run else 'added'} to {PLUGIN_ENV} in {settings}"
 
 
+def antigravity_plugin_dir(home: Path) -> Path | None:
+    """The Antigravity plugin folder: profile link first, else KB_ANTIGRAVITY_PLUGIN_DIR."""
+    profile = home / ".nix-profile" / ANTIGRAVITY_PLUGIN_TAIL
+    if (profile / "plugin.json").is_file():
+        return profile
+    own = os.environ.get("KB_ANTIGRAVITY_PLUGIN_DIR", "")
+    return Path(own) if own and (Path(own) / "plugin.json").is_file() else None
+
+
+def install_antigravity_plugin(home: Path, plugin_dir: Path, *, dry_run: bool = False) -> str:
+    """Sync plugin_dir into ~/.gemini/config/plugins/kb when Antigravity is installed."""
+    gemini = home / ".gemini"
+    if not (gemini / "antigravity").is_dir() and not (gemini / "config").is_dir():
+        return "skipped: no ~/.gemini/antigravity (Antigravity not installed)"
+    dst = gemini / "config" / "plugins" / "kb"
+    changed = False
+    for src_file in sorted(plugin_dir.rglob("*")):
+        if src_file.is_dir():
+            continue
+        target = dst / src_file.relative_to(plugin_dir)
+        data = src_file.read_bytes()
+        if not target.exists() or target.read_bytes() != data:
+            changed = True
+            if not dry_run:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+    if not changed:
+        return f"up to date in {dst}"
+    return f"{'would install' if dry_run else 'installed'} in {dst}"
+
+
 def install(
     cfg: Config,
     paths: Paths,
@@ -282,7 +314,15 @@ def summary(
     help="Leave ~/.claude/settings.json alone (by default the kb plugin is put on "
     "CLAUDE_CODE_PLUGIN_DIRS).",
 )
-def main(dry_run: bool, home: Path | None, no_claude_plugin: bool) -> None:
+@click.option(
+    "--no-antigravity-plugin",
+    is_flag=True,
+    help="Leave ~/.gemini/config/plugins/kb alone (by default the kb sidecar plugin is synced "
+    "there when Antigravity is installed).",
+)
+def main(
+    dry_run: bool, home: Path | None, no_claude_plugin: bool, no_antigravity_plugin: bool
+) -> None:
     """``kb-setup`` entry point; --dry-run prints the unit and conf and writes nothing."""
     if home is not None and not dry_run:
         raise click.UsageError("--home is only valid together with --dry-run")
@@ -301,6 +341,8 @@ def main(dry_run: bool, home: Path | None, no_claude_plugin: bool) -> None:
         click.echo(f"# copied from {package_conf_dir(pkg)}: {', '.join(LOG_CONFIGS)}")
         if not no_claude_plugin:
             click.echo(f"# claude plugin: {claude_line(home, dry_run=True)}")
+        if not no_antigravity_plugin:
+            click.echo(f"# antigravity plugin: {antigravity_line(home, dry_run=True)}")
         return
     try:
         install(
@@ -324,6 +366,8 @@ def main(dry_run: bool, home: Path | None, no_claude_plugin: bool) -> None:
         raise click.ClickException(str(exc)) from exc
     if not no_claude_plugin:
         click.echo(f"claude:   {claude_line(home, dry_run=False)}")
+    if not no_antigravity_plugin:
+        click.echo(f"antigrav: {antigravity_line(home, dry_run=False)}")
 
 
 def claude_line(home: Path, *, dry_run: bool) -> str:
@@ -333,5 +377,16 @@ def claude_line(home: Path, *, dry_run: bool) -> str:
         return "skipped: this kb package has no Claude Code plugin"
     try:
         return f"{plugin_dir}: {register_claude_plugin(home, plugin_dir, dry_run=dry_run)}"
+    except OSError as exc:
+        return f"skipped: {exc}"
+
+
+def antigravity_line(home: Path, *, dry_run: bool) -> str:
+    """The summary line for the Antigravity plugin step."""
+    plugin_dir = antigravity_plugin_dir(home)
+    if plugin_dir is None:
+        return "skipped: this kb package has no Antigravity plugin"
+    try:
+        return f"{plugin_dir}: {install_antigravity_plugin(home, plugin_dir, dry_run=dry_run)}"
     except OSError as exc:
         return f"skipped: {exc}"

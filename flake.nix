@@ -73,11 +73,13 @@
             for bin in kb kb-setup; do
               makeWrapper ${kbEnv}/bin/$bin $out/bin/$bin \
                 --set KB_NEO4J_PACKAGE ${neo4j} \
-                --set KB_PLUGIN_DIR $out/share/kb/claude-plugin
+                --set KB_PLUGIN_DIR $out/share/kb/claude-plugin \
+                --set KB_ANTIGRAVITY_PLUGIN_DIR $out/share/kb/antigravity-plugin
             done
-            # the Claude Code plugin; loaded from ~/.nix-profile/share/kb/claude-plugin (docs/install.md)
+            # the Claude Code and Antigravity plugins; loaded from ~/.nix-profile/share/kb/ (docs/install.md)
             mkdir -p $out/share/kb
             cp -r ${./claude-plugin} $out/share/kb/claude-plugin
+            cp -r ${./antigravity-plugin} $out/share/kb/antigravity-plugin
           '';
           meta.mainProgram = "kb";
         };
