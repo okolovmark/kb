@@ -27,6 +27,7 @@ class FakeOdoo:
     calls: list[dict[str, Any]] = field(default_factory=list)
     url: str = ""
     users: dict[str, int] = field(default_factory=lambda: {"dev": 42})
+    has_key: bool = True  # OCA project_key installed
 
 
 def fake_server(state: FakeOdoo) -> Iterator[FakeOdoo]:
@@ -53,6 +54,13 @@ def fake_server(state: FakeOdoo) -> Iterator[FakeOdoo]:
                     assert method == "search_read" and kwargs == {"fields": ["id"], "limit": 1}
                     login = args[0][0][2]
                     result = [{"id": state.users[login]}] if login in state.users else []
+                elif method == "fields_get":
+                    assert model == "project.task" and args == [["key"]]
+                    result = {"key": {"type": "char"}} if state.has_key else {}
+                elif "key" in kwargs["fields"] and not state.has_key:
+                    message = "Invalid field 'key' on model 'project.task'"
+                    error = {"message": "Odoo Server Error", "data": {"message": message}}
+                    result = None
                 else:
                     assert (model, method) == ("project.task", "search_read")
                     result = [{k: t.get(k, False) for k in kwargs["fields"]} for t in state.tasks]
@@ -164,8 +172,9 @@ def odoo_tasks(kb_env) -> dict[str, dict[str, Any]]:
 def assert_first_run(odoo: FakeOdoo, first) -> None:
     assert first.exit_code == 0, first.output
     assert first.output.strip() == "odoo: 3 open tasks, 3 new, 0 updated, 0 closed"
-    login, search = odoo.calls
+    login, fields, search = odoo.calls
     assert login["args"] == ["prod", "mark", "secret"]
+    assert fields["args"][3:6] == ["project.task", "fields_get", [["key"]]]
     assert search["args"][3:5] == ["project.task", "search_read"]
     assert search["args"][5] == [
         [["user_ids", "in", [UID]], ["is_closed", "=", False], ["project_id", "=", 5]]
@@ -546,7 +555,7 @@ def test_assignee_login_resolves_the_uid_the_tasks_are_filtered_on(kb_env, odoo:
     result = runner.invoke(main, ["sync", "odoo"])
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "odoo: 3 open tasks, 3 new, 0 updated, 0 closed"
-    login, users, search = odoo.calls
+    login, users, _fields, search = odoo.calls
     assert login["method"] == "login"
     assert users["args"][3:6] == ["res.users", "search_read", [[["login", "=", "dev"]]]]
     assert users["args"][6] == {"fields": ["id"], "limit": 1}
@@ -594,3 +603,16 @@ def test_untracked_list_is_capped_and_printed_only_when_it_changes(kb_env, odoo:
     runner.invoke(main, ["archive", str(ids[0]), "--reason", "gone"])
     third = runner.invoke(main, ["sync", "odoo"])
     assert third.output.splitlines()[1].startswith("9 untracked odoo records")
+
+
+def test_odoo_without_project_key_files_tasks_under_their_id(kb_env, odoo: FakeOdoo) -> None:
+    odoo.has_key = False  # asking a keyless Odoo for "key" fails the whole search_read
+    configure(kb_env, odoo.url)
+    result = CliRunner().invoke(main, ["sync", "odoo"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "odoo: 3 open tasks, 3 new, 0 updated, 0 closed"
+    search = odoo.calls[-1]
+    assert search["args"][6] == {"fields": [f for f in sync_odoo.TASK_FIELDS if f != "key"]}
+    tasks = odoo_tasks(kb_env)
+    assert sorted(tasks) == ["101", "102", "103"]
+    assert tasks["101"]["title"] == "101 First task"
