@@ -132,8 +132,14 @@ To get the space back sooner, force that rotation (checked on a scratch copy wit
 4. `system`: it rotates only past 256 KiB of log (128k is the floor, rounded up to two 128 KiB
    segments), so it takes about 130 `CREATE USER` / `DROP USER` pairs of a throwaway user run
    against the `system` database.
-5. `kb-setup`: it re-renders the conf without the two lines and restarts; the checkpoint at that
-   stop deletes the old files under `keep_none`.
+5. `kb-setup`: it re-renders the conf without the two lines and restarts. The checkpoint at that
+   stop deletes an old file under `keep_none` once a transaction has landed in the new one;
+   otherwise it stays, already cut to its content, until a later pruning.
+
+Done on the live install 2026-10-21: `~/.local/share/kb` went from 531 MB to 43 MB. `system`
+rotated after 124 pairs and its old file was deleted. `neo4j` kept its old file at its 24.8 MB of
+log, because the one write landed before the rotation. The three restarts (backup, temporary conf,
+`kb-setup`) were 20 to 27 s each, and node and relationship counts were unchanged.
 
 `neo4j-admin database dump` and `load` do not help: the dump carries the 256 MiB log byte for
 byte, and the load writes it back.
