@@ -118,7 +118,7 @@ and wrong types are errors, so a typo is loud. The keys most people touch:
 | `calendar.country` | `PH` | whose public holidays are not working days |
 | `escalation.*` | 14/7/2 calendar days, 5/10/15 working days | when each schedule starts speaking up |
 | `sources.odoo.enabled` | `false` | pull your open tickets in as tasks |
-| `neo4j.tx_log_preallocate` | `true` | `false` reclaims about 516 MB of empty transaction logs |
+| `neo4j.tx_log_preallocate` | `false` | `true` restores Neo4j's 256 MiB of empty space per transaction log |
 
 Every key, the Odoo source and the per-record overrides are in
 [docs/configuration.md](docs/configuration.md).

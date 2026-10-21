@@ -21,7 +21,7 @@ data_dir = "~/.local/share/kb"          # neo4j/{data,logs,run,import,plugins,co
 start_timeout = 30                       # seconds the hook / kb-setup waits for bolt
 heap_max = "512m"
 pagecache = "128m"
-tx_log_preallocate = true                # false reclaims ~516 MB of empty transaction logs
+tx_log_preallocate = false               # true: Neo4j's 256 MiB empty log per database
 
 [scopes]                                 # name = absolute path; cwd inside -> that scope
 # my-project = "~/projects/my-project"
