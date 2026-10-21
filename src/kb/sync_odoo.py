@@ -114,6 +114,29 @@ def rpc(url: str, service: str, method: str, args: list[Any], timeout: int) -> A
     return payload.get("result")
 
 
+def task_fields(cfg: OdooSource, uid: int, password: str) -> list[str]:
+    """TASK_FIELDS, less ``key`` on an Odoo without OCA project_key: a search_read naming a
+    field the model lacks fails as a whole, and a keyless task is filed under its id anyway."""
+    found = rpc(
+        cfg.url,
+        "object",
+        "execute_kw",
+        [
+            cfg.database,
+            uid,
+            password,
+            "project.task",
+            "fields_get",
+            [["key"]],
+            {"attributes": ["type"]},
+        ],
+        cfg.timeout,
+    )
+    if isinstance(found, dict) and "key" in found:
+        return TASK_FIELDS
+    return [name for name in TASK_FIELDS if name != "key"]
+
+
 def fetch_tasks(cfg: OdooSource, password: str) -> list[dict[str, Any]]:
     """Login, resolve the assignee (``assignee_login`` or the RPC user), then ``project.task``
     search_read of that user's open tasks (project filter if configured)."""
@@ -158,7 +181,7 @@ def fetch_tasks(cfg: OdooSource, password: str) -> list[dict[str, Any]]:
             "project.task",
             "search_read",
             [domain],
-            {"fields": TASK_FIELDS},
+            {"fields": task_fields(cfg, uid, password)},
         ],
         cfg.timeout,
     )
