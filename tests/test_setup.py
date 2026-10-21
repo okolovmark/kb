@@ -101,14 +101,15 @@ def test_render_conf_inherits_package_defaults_minus_overrides(tmp_path: Path) -
 def test_tx_log_preallocate_follows_the_config(tmp_path: Path) -> None:
     cfg = load(path=tmp_path / "none", home=tmp_path)
     paths = Paths.from_config(cfg, tmp_path)
-    assert conf_settings(cfg, paths)["db.tx_log.preallocate"] == "true"  # Neo4j's own default
+    assert cfg.neo4j.tx_log_preallocate is False
+    assert conf_settings(cfg, paths)["db.tx_log.preallocate"] == "false"
+    assert "db.tx_log.preallocate=false" in render_conf(conf_settings(cfg, paths), "").splitlines()
 
     config_file = tmp_path / "config.toml"
-    config_file.write_text("[neo4j]\ntx_log_preallocate = false\n")
-    off = load(path=config_file, home=tmp_path)
-    assert off.neo4j.tx_log_preallocate is False
-    assert conf_settings(off, paths)["db.tx_log.preallocate"] == "false"
-    assert "db.tx_log.preallocate=false" in render_conf(conf_settings(off, paths), "").splitlines()
+    config_file.write_text("[neo4j]\ntx_log_preallocate = true\n")
+    on = load(path=config_file, home=tmp_path)
+    assert on.neo4j.tx_log_preallocate is True
+    assert conf_settings(on, paths)["db.tx_log.preallocate"] == "true"  # Neo4j's own default
 
 
 def test_write_if_changed(tmp_path: Path) -> None:
@@ -372,7 +373,6 @@ def test_register_claude_plugin_leaves_a_missing_claude_or_a_broken_file_alone(
         settings.write_text(broken)
         assert register_claude_plugin(tmp_path, PROFILE_PLUGIN).startswith("skipped:")
         assert settings.read_text() == broken
-
 
 
 def _agy_plugin(folder: Path) -> Path:

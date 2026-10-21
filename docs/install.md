@@ -110,13 +110,16 @@ run kb-setup`: a database keeps the schema it was bootstrapped with until `kb-se
 `neo4j console` is two JVMs: the bootloader (`-Xmx128m`, 183 MB RSS) and the server (heap 512m +
 page cache 128m, 976 MB RSS); the unit's cgroup sits at 1.17 GB idle.
 
-Neo4j preallocates 256 MiB per transaction log (`db.tx_log.preallocate`, default on), one per
-database, so `data/transactions` holds 515 MB beside a 4.5 MB graph. Setting
-`[neo4j] tx_log_preallocate = false` and running
-`kb-setup` turns it off and gets that half gigabyte back. The point of preallocation is to avoid
-fragmentation and keep write latency predictable; at this size neither effect is measurable.
-Existing log files do not shrink when the setting changes, only once the service restarts and
-rotates them.
+Neo4j's own default preallocates 256 MiB per transaction log (`db.tx_log.preallocate`), one per
+database: 515 MB of zeros beside a 4.5 MB graph. kb turns it off (`[neo4j] tx_log_preallocate =
+false`, the default since 2026-10-21), so a log grows with what is written. The point of
+preallocation is to avoid fragmentation and keep write latency predictable; at this size neither
+effect is measurable.
+
+An install set up with preallocation on keeps its two 256 MiB files after the switch: neither
+`kb-setup` nor a restart shrinks them (measured 2026-10-21: both still 268435456 bytes after the
+restart, holding 23.6 MiB and 27 KB of log). A file is replaced only when it rotates, at
+`db.tx_log.rotation.size` (256 MiB) of content.
 
 `systemctl start` returns 3 to 4 s before bolt listens; a stop takes about 10 s. A stop during boot
 ends the bootloader with exit 143, which the unit counts as success.
