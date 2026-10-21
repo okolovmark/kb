@@ -119,7 +119,24 @@ effect is measurable.
 An install set up with preallocation on keeps its two 256 MiB files after the switch: neither
 `kb-setup` nor a restart shrinks them (measured 2026-10-21: both still 268435456 bytes after the
 restart, holding 23.6 MiB and 27 KB of log). A file is replaced only when it rotates, at
-`db.tx_log.rotation.size` (256 MiB) of content.
+`db.tx_log.rotation.size` (256 MiB) of content; the rotation truncates it to what was written.
+
+To get the space back sooner, force that rotation (checked on a scratch copy with Neo4j 2026.07.0,
+2026-10-21: counts unchanged, `neo4j-admin database check` clean for both databases):
+
+1. `kb backup`.
+2. Add `db.tx_log.rotation.size=128k` and `db.tx_log.rotation.retention_policy=keep_none` to
+   `neo4j/conf/neo4j.conf`, then `kb service restart`. Community Edition cannot change either
+   setting live.
+3. `neo4j`: any kb write rotates it.
+4. `system`: it rotates only past 256 KiB of log (128k is the floor, rounded up to two 128 KiB
+   segments), so it takes about 130 `CREATE USER` / `DROP USER` pairs of a throwaway user run
+   against the `system` database.
+5. `kb-setup`: it re-renders the conf without the two lines and restarts; the checkpoint at that
+   stop deletes the old files under `keep_none`.
+
+`neo4j-admin database dump` and `load` do not help: the dump carries the 256 MiB log byte for
+byte, and the load writes it back.
 
 `systemctl start` returns 3 to 4 s before bolt listens; a stop takes about 10 s. A stop during boot
 ends the bootloader with exit 143, which the unit counts as success.
