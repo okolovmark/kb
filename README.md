@@ -128,7 +128,7 @@ and wrong types are errors, so a typo is loud. The keys most people touch:
 | Key | Default | Decides |
 | --- | --- | --- |
 | `general.timezone` | `Asia/Manila` | which day "today" means |
-| `scopes` | empty | project name to directory, the map behind the scope view |
+| `scopes` | empty | project name to directory, the map behind the scope view; `kb scope add NAME` registers the current directory |
 | `calendar.country` | `PH` | whose public holidays are not working days |
 | `escalation.*` | 14/7/2 calendar days, 5/10/15 working days | when each schedule starts speaking up |
 | `sources.odoo.enabled` | `false` | pull your open tickets in as tasks |
