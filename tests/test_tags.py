@@ -45,7 +45,9 @@ def test_add_needs_an_area_tag_outside_personal(kb_env) -> None:
     refused = kb("add", "Untagged", "--scope", "proj", code=4)
     assert refused.output.startswith("Error: kb add needs an area tag in scope proj: --tag AREA;")
     assert f"areas: demo (from {kb_env.proj / '.kb' / 'tags.toml'})" in refused.output
-    builtin = "built-in areas: kb, claude_setup, tooling, workflow, writing, career, finance, home"
+    builtin = (
+        "built-in areas: kb, claude_setup, tooling, odoo, workflow, writing, career, finance, home"
+    )
     assert builtin in refused.output
     assert "types: bug, feature, refactor," in refused.output
     # a type tag says what kind of work it is, not where: still no area
@@ -66,9 +68,13 @@ def test_add_refuses_tags_outside_the_vocabulary() -> None:
     kb("add", "Global", "--scope", "global", "--tag", "demo", code=4)
     kb("add", "Personal", "--scope", "personal", "--tag", "demo", code=4)
     assert kb_json("add", "Global ok", "--scope", "global", "--tag", "kb")["tags"] == ["kb"]
+    # odoo is built in: knowledge every Odoo project shares, valid in global and in a project
+    assert kb_json("add", "RPC gotchas", "--scope", "global", "--tag", "odoo")["tags"] == ["odoo"]
+    assert kb_json("add", "Here too", "--scope", "proj", "--tag", "odoo")["tags"] == ["odoo"]
     assert kb_json("add", "Home", "--scope", "personal", "--tag", "home")["tags"] == ["home"]
     written = kb_json("search", "Global OR Personal OR x")["hits"]
     assert [h["title"] for h in written] == ["Global ok"]  # the refused adds wrote nothing
+    assert "odoo" in tags.BUILTIN_AREAS
 
 
 def test_a_scope_without_a_tags_file_has_the_built_in_areas(kb_env) -> None:

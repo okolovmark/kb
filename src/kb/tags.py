@@ -22,6 +22,7 @@ BUILTIN_AREAS = {
     "kb": "kb itself: the CLI, the store, its hooks and plugins",
     "claude_setup": "agent harnesses: Claude Code settings, hooks, skills, plugins, MCP servers",
     "tooling": "developer tools and the machine: git, Nix, editors, linters, the desktop",
+    "odoo": "Odoo knowledge every project shares: the framework, its versions, RPC and connectors",
     "workflow": "how the work is done: rules, conventions, estimates, reviews, status",
     "writing": "texts written in your name: posts, messages, the CV, documentation style",
     "career": "jobs, applications, the professional profile",

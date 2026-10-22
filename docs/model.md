@@ -61,8 +61,8 @@ vocabulary is closed. Reasoning: [adr/0007](adr/0007-area-tags-from-a-repo-owned
 
 - **Areas.** A project scope's areas come from `.kb/tags.toml` at its `[scopes]` path (format in
   [configuration.md](configuration.md#kbtagstoml)), plus kb's built-in areas: `kb`,
-  `claude_setup`, `tooling`, `workflow`, `writing`, `career`, `finance`, `home`. `global` and
-  `personal` records use the built-in areas only.
+  `claude_setup`, `tooling`, `odoo`, `workflow`, `writing`, `career`, `finance`, `home`.
+  `global` and `personal` records use the built-in areas only.
 - **Checked on write.** `add` and `edit --tag` refuse a tag outside the vocabulary of the
   record's scope (exit 4, listing the valid tags); tags are lowered. Tags a record already
   carries stay, whatever they are.

@@ -24,8 +24,8 @@ the same for everyone and change by review, not by whoever typed a tag first.
   pull request. The copier template renders it for its projects and never overwrites it;
   `kb tags init` writes a seed elsewhere.
 - **kb ships the rest.** Built-in areas for what global and personal records are about and for
-  the setup around any project: `kb`, `claude_setup`, `tooling`, `workflow`, `writing`,
-  `career`, `finance`, `home`. Type tags: `bug`, `feature`, `refactor`, `review`, `testing`,
+  the setup around any project: `kb`, `claude_setup`, `tooling`, `odoo`, `workflow`,
+  `writing`, `career`, `finance`, `home`. Type tags: `bug`, `feature`, `refactor`, `review`, `testing`,
   `docs`, `config`, `research`, `discussion`, `cleanup`, `migration`, `data_fix`. Changing either
   list is a kb release.
 - **Which tags a record may carry.** In a project scope: the file's areas, the built-in areas and
@@ -47,7 +47,9 @@ the same for everyone and change by review, not by whoever typed a tag first.
 The built-in areas were chosen from what the 70 live global and personal records cover:
 kb itself, the agent harness (settings, hooks, skills, MCP), developer tools and the machine,
 working rules (estimates, reviews, status, conduct), texts written in the user's name, and
-career, money and the household, which had records or tasks but no shared word.
+career, money and the household, which had records or tasks but no shared word. `odoo` was added
+in review: knowledge about Odoo itself is shared by every Odoo project on the machine (16, 19,
+20), and five global records were about it with no other area to go to.
 
 ## Consequences
 
