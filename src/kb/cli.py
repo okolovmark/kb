@@ -31,13 +31,14 @@ from kb import (
     migrate_journal,
     migrate_nodes,
     records,
+    scopes,
     service,
     similar,
     sync_odoo,
     tags,
     urgency,
 )
-from kb.config import Config, ConfigError, dump_toml, load, render_default, to_plain
+from kb.config import Config, ConfigError, config_path, dump_toml, load, render_default, to_plain
 from kb.paths import Paths, neo4j_package, neo4j_version
 from kb.runner import Runner, SubprocessRunner, format_process_error
 
@@ -46,6 +47,9 @@ T = TypeVar("T")
 # beyond click's 1 (error) and 2 (usage): the two refusals an agent is expected to act on
 EXIT_TAGS = 4
 EXIT_SIMILAR = 5
+# kb scope: a path in no scope (which), a NAME or PATH already taken (add)
+EXIT_NO_SCOPE = 3
+EXIT_SCOPE_CONFLICT = 6
 
 
 def kb_version() -> str:
@@ -293,6 +297,84 @@ def config_init(app: App) -> None:
     click.echo(f"wrote {path}")
 
 
+class ScopeTakenError(click.ClickException):
+    """NAME or PATH is already taken in [scopes]: exit 6."""
+
+    exit_code = EXIT_SCOPE_CONFLICT
+
+
+@main.group("scope", help="Project scopes in [scopes]: register, list, find a path's.")
+def scope_group() -> None:
+    """Group for the scope subcommands."""
+    pass
+
+
+@scope_group.command("add", help="Register PATH as scope NAME in [scopes]; safe to re-run.")
+@click.argument("name")
+@click.argument("path", default=".")
+@click.option("--force", is_flag=True, help="Point an existing NAME at PATH instead.")
+@pass_app
+def scope_add(app: App, name: str, path: str, force: bool) -> None:
+    """Insert or rewrite one line of [scopes]; every other line of the file stays as it is.
+
+    Exit 0 when added or already there, 6 when NAME points elsewhere (without --force) or
+    PATH already belongs to another scope.
+    """
+    file = config_path(app.home)
+    target = scopes.normalise(path, app.home, Path.cwd())
+    before = file.read_text() if file.exists() else None
+    try:
+        text, outcome = scopes.add(before, name, target, app.home, force=force)
+    except scopes.ScopeConflictError as exc:
+        raise ScopeTakenError(str(exc)) from exc
+    except scopes.ScopeNameError as exc:
+        raise click.UsageError(str(exc)) from exc
+    if outcome.action != "exists":
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(text)
+        # the loaded config predates the write; nothing else in this run reads it again
+        app._cfg = None
+        load(path=file, home=app.home)  # a bad write fails here, loudly, not in the next command
+    words = {"added": "added", "updated": "now points at", "exists": "already"}
+    app.emit(
+        {"action": outcome.action, "name": outcome.name, "path": outcome.path, "file": str(file)},
+        f"scope {outcome.name} {words[outcome.action]} {outcome.path}"
+        if outcome.action != "added"
+        else f"scope {outcome.name} added: {outcome.path} ({file})",
+    )
+
+
+@scope_group.command("list", help="Every scope in [scopes]: name, path, whether it exists.")
+@pass_app
+def scope_list(app: App) -> None:
+    """One line per scope; a missing directory is marked."""
+    rows = [
+        {"name": name, "path": scopes.display(path, app.home), "exists": path.exists()}
+        for name, path in app.cfg.scopes.items()
+    ]
+    width = max((len(r["name"]) for r in rows), default=0)
+    text = "\n".join(
+        f"{r['name']:<{width}}  {r['path']}{'' if r['exists'] else '  (missing)'}" for r in rows
+    )
+    app.emit({"scopes": rows}, text or "no scopes configured: kb scope add NAME PATH")
+
+
+@scope_group.command("which", help="The scope PATH (default: the cwd) is in; exit 3 if none.")
+@click.argument("path", default=".")
+@pass_app
+def scope_which(app: App, path: str) -> None:
+    """Print the scope name; the longest matching path wins, as everywhere in kb."""
+    target = scopes.normalise(path, app.home, Path.cwd())
+    name = scopes.scope_of(app.cfg.scopes, target)
+    if name is None:
+        if app.as_json:
+            click.echo(json.dumps({"scope": None, "path": scopes.display(target, app.home)}))
+        else:
+            click.echo(f"{scopes.display(target, app.home)} is in no scope", err=True)
+        click.get_current_context().exit(EXIT_NO_SCOPE)
+    app.emit({"scope": name, "path": scopes.display(target, app.home)}, name)
+
+
 # --- service ----------------------------------------------------------------------------
 
 
@@ -524,13 +606,8 @@ def check_scope(cfg: Config, name: str) -> str:
 
 
 def cwd_scope(cfg: Config) -> str | None:
-    """The ``[scopes]`` name whose path contains the cwd, else None."""
-    cwd = Path.cwd().resolve()
-    for name, path in cfg.scopes.items():
-        root = path.resolve()
-        if cwd == root or root in cwd.parents:
-            return name
-    return None
+    """The ``[scopes]`` name whose path contains the cwd (the longest wins), else None."""
+    return scopes.scope_of(cfg.scopes, Path.cwd())
 
 
 def resolve_scope(cfg: Config, flag: str | None) -> str | None:

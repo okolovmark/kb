@@ -59,6 +59,22 @@ dir = "~/kb-backups"
 `sources.odoo.scope` must be `global` or a `[scopes]` name, checked when the config loads and
 `enabled = true`.
 
+### Registering a project
+
+`kb scope add NAME [PATH]` writes `NAME = "PATH"` into `[scopes]` (PATH defaults to the current
+directory and is stored with `~` for your home). It changes one line and leaves every other line
+and comment of the file as it was, so a hand-edited config stays readable.
+- **Re-running is safe.** The same pair again exits 0 and writes nothing.
+- **A name that already points elsewhere** exits 6. Add `--force` to rewrite that one line.
+- **A directory that already belongs to another scope** exits 6 even with `--force`. Renaming a scope
+  would leave its records behind, so do that by hand.
+- **Reserved names:** `global`, `personal` and `all` are kb's own and cannot be taken.
+
+`kb scope list` prints every scope with its path and marks a path that no longer exists.
+`kb scope which [PATH]` prints the scope a directory is in (the longest matching path wins, the
+same rule every command uses for the current directory) and exits 3 when it is in none, which is
+how a project's session hook can tell that the project is not registered yet.
+
 ## Environment
 
 - `KB_CONFIG` — the config file to read instead of `~/.config/kb/config.toml`.
