@@ -4,8 +4,8 @@ Records and their properties, the five kinds of schedule and the urgency each pr
 relationships, sessions, and the commands that work on them. Back to the [README](../README.md).
 
 Records are addressed by id or slug. Mutating commands print `[id] title (slug)`; `--json` (before
-or after the command name) prints the record instead. Errors are one line, exit 1 (usage errors 2).
-Every command takes `--help`.
+or after the command name) prints the record instead. Errors are one line, exit 1 (usage errors 2;
+4 when a tag is refused, 5 when `add` finds a duplicate). Every command takes `--help`.
 
 ## Records
 
@@ -19,20 +19,26 @@ synced tasks `stage`, `synced_at` and `origin` (`odoo-sync` on records the sync 
 
 `kb add TITLE` creates one, a task unless `--kind` says otherwise, with the scope from `--scope`,
 else the cwd inside a `[scopes]` path, else an error. Its other flags: `--body TEXT|-`,
-`--body-file F`, `--summary S`, `--slug S`, `--pin/--no-pin`, `--tag T` (repeatable),
-`--link REL:REF` (repeatable), the schedule flags below, `--source odoo --external-id X` and
-`--journal-ref R`.
+`--body-file F`, `--summary S`, `--slug S`, `--pin/--no-pin`, `--tag T` (repeatable, from the
+scope's vocabulary, one area required: see [Tags](#tags)), `--link REL:REF` (repeatable), the
+schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--distinct` (see
+[Duplicates](#duplicates)).
 
 - `kb append REF TEXT` — body += `**<today>:** TEXT`.
-- `kb edit REF [--title T] [--summary S] [--body TEXT|-] [--body-file F]` — `--summary ""` clears
-  the summary; with no flag it opens `$EDITOR` on the body. An `edited` event, carrying the previous
-  values, is written only when something changed. On a task it resets `skips` and `backlog`.
+- `kb edit REF [--title T] [--summary S] [--body TEXT|-] [--body-file F] [--tag T] [--untag T]` —
+  `--summary ""` clears the summary; `--tag` adds a tag from the vocabulary of the record's scope,
+  `--untag` removes one (never the last area tag of a record that needs one); with no flag it
+  opens `$EDITOR` on the body. An `edited` event, carrying the previous values, is written only
+  when something changed. On a task it resets `skips` and `backlog`.
 - `kb show REF` — header, the summary when set, schedule, `urgency: L<n> <name> — <reason>`, body,
   links, last 10 events. On a session it adds the state line (`session: <id>  opened: …
   open|closed: …`) and groups its `OPENED_IN` / `TOUCHED` neighbours as `created here:` /
   `touched here:`.
-- `kb search QUERY [--scope S] [--kind K] [--all] [--limit N]` — full-text (Lucene) over title and
-  body, printing `[id] kind slug title  score`. Archived records only with `--all`.
+- `kb search QUERY [--scope S] [--kind K] [--all] [--limit N]` — full-text over title, summary
+  and body, printing `[id] kind slug title  score`. The query is Lucene syntax; one Lucene cannot
+  parse (a `/`, an unbalanced quote) is searched again as plain text, with
+  `kb search: not valid Lucene syntax, searched as plain text` on stderr (`plain_text: true` under
+  `--json`). Archived records only with `--all`.
 - `kb archive REF --reason T` — hidden from today, next, search and index, found again with
   `--all`. Archiving an archived record prints a message and writes no event.
 - `kb supersede OLD NEW` — `NEW -[SUPERSEDES]-> OLD`, OLD archived, `superseded` events on both.
@@ -45,6 +51,74 @@ else the cwd inside a `[scopes]` path, else an error. Its other flags: `--body T
   `updated_at`), as lines `- [id] slug — summary` (the title when there is no summary, cut at 160
   characters with `…`). Kinds default to `feedback,note,howto,reference,decision`. N is the total
   line budget, pinned first (`[index].budget_lines`, N >= 1). Exit 0 always.
+
+## Tags
+
+Two kinds: an **area** names a module or subsystem and pulls context (`kb context`); a **type**
+says what kind of work a record is (`bug`, `feature`, `refactor`, `review`, `testing`, `docs`,
+`config`, `research`, `discussion`, `cleanup`, `migration`, `data_fix`) and pulls nothing. The
+vocabulary is closed. Reasoning: [adr/0007](adr/0007-area-tags-from-a-repo-owned-closed-vocabulary.md).
+
+- **Areas.** A project scope's areas come from `.kb/tags.toml` at its `[scopes]` path (format in
+  [configuration.md](configuration.md#kbtagstoml)), plus kb's built-in areas: `kb`,
+  `claude_setup`, `tooling`, `workflow`, `writing`, `career`, `finance`, `home`. `global` and
+  `personal` records use the built-in areas only.
+- **Checked on write.** `add` and `edit --tag` refuse a tag outside the vocabulary of the
+  record's scope (exit 4, listing the valid tags); tags are lowered. Tags a record already
+  carries stay, whatever they are.
+- **One area required.** `kb add` refuses a record without an area tag (exit 4), for every kind
+  but a session and outside the personal scope. Tasks synced from Odoo arrive untagged; tagging
+  one (`edit --tag` alone) does not stop its title from following Odoo.
+- `kb tags [--scope S]` — the vocabulary of S (default the cwd scope): the file in use, areas and
+  types with how many records in the view carry each, and the tags in use outside the vocabulary.
+- `kb tags init [--scope S]` — writes a seed `.kb/tags.toml` at the project's root; an existing
+  file is left alone.
+- `kb context REF [--scope S]` — what to read before working on a record: its area tags, then
+  every knowledge record (note, feedback, howto, reference, decision) in the view sharing one, as
+  `[id] kind title — summary`, most shared areas first, then pinned, then most recently updated,
+  then the other open tasks in those areas. A record without an area tag is refused (exit 4)
+  with the `kb edit REF --tag AREA` that fixes it.
+
+## Duplicates
+
+Before `kb add` creates a record it searches the view for open records of the same family (a
+task against tasks; knowledge against notes, howtos, feedback, references and decisions): the
+title and summary, escaped, against the full-text index, the top 20, then a cosine of the two
+records' title and summary words, each word weighted by its rarity among all records. At 0.40 or
+more the add is refused with exit 5:
+
+```
+similar: [412] task The export cron has no savepoint per batch
+hint: kb append 412 TEXT, or re-run with --distinct
+```
+
+up to three `similar:` lines on stderr, or `{"similar": [{id, kind, scope, slug, title,
+similarity}]}` under `--json`. Nothing is written. `--distinct` creates the record anyway and
+records `{"distinct": true, "similar": [ids]}` on its `created` event.
+
+`kb sync odoo` runs the same check when it creates a task for a new ticket, against open tasks
+that are not Odoo tasks, and prints once
+`possible duplicate: [new] <title> ~ [old] <title>: kb promote <old> <KEY>, then kb merge <new> <old>`
+(`possible_duplicates` under `--json`). The threshold and its measurement:
+[adr/0006](adr/0006-search-stays-lexical-with-the-summary-indexed.md).
+
+## Consolidation
+
+`kb consolidate [--scope S]` proposes and writes nothing: for notes, references, feedback and
+howtos in the view,
+
+- **merge** — records whose titles and summaries pass the duplicate threshold and whose area tags
+  are the same set; the kept one is pinned, else the longest, else the oldest. Commands:
+  `kb edit <keep> --body-file <merged.md>`, then `kb merge <dup> <keep>`.
+- **condense** — a body of 10 KB or more, with its count of dated paragraphs. Command:
+  `kb edit <id> --body-file <condensed.md>`; the `edited` event keeps the full previous body.
+- **archive** — a record a live record `SUPERSEDES` (decisions included, the only case a decision
+  appears), and a note of finished work: every task it is linked to closed 14 days ago or more, the
+  note unchanged since, no live knowledge record linked to it.
+
+Each proposal carries its records, a reason and the commands. Tasks and sessions never appear;
+a decision is never merged or condensed. The plugin skill `kb-consolidate` puts the proposals in
+front of the user and applies only what they approve.
 
 ## Schedules and urgency
 
@@ -119,14 +193,16 @@ body. Its slug is `<YYYY-MM-DD>-<n>`, where `n` is the lowest number no record o
 counted across every scope rather than per scope, so a second scope's first session of the day takes
 the next free number. Its own properties: `session_id` (Claude's id, unique among sessions),
 `source` (`startup` | `resume` | `clear` | `compact` | `fork` | `migrated`), `opened_at`,
-`closed_at`, `reason` (the SessionEnd reason) and `no_summary`. The title is the intent, the body
+`closed_at`, `reason` (the SessionEnd reason), `no_summary` and `title_hint`. The title is the intent, the body
 the narrative in the old journal shape (Intent / Tags / Files touched / Done / Decisions / Open
 threads).
 
-- `kb session open --scope S --id SESSION_ID --source SRC` — the SessionStart hook. Creates the
-  Session record for that id (slug `<date>-<n>`, an `opened` event) or, when the id is already
-  there, leaves it as it is, so resume and compact re-enter the same session; a closed one is
-  re-opened, and a placeholder title takes the new source.
+- `kb session open --scope S --id SESSION_ID --source SRC [--title T]` — the SessionStart hook.
+  Creates the Session record for that id (slug `<date>-<n>`, an `opened` event) or, when the id is
+  already there, leaves it as it is, so resume and compact re-enter the same session; a closed one
+  is re-opened, and a placeholder title takes the new source. `--title` is the session's title in
+  the app, stored as `title_hint` (120 characters, the record's own title untouched); a later open
+  with another one updates it.
 - `kb session close [--id SESSION_ID] [--reason R] [--body TEXT|-|--body-file F] [--title T]` — the
   SessionEnd hook plus Claude's summary: `closed_at`, `reason` and a `closed` event on the first
   call. `--body` and `--title` write the narrative, then or any time later; `no_summary` follows the

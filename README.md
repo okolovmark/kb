@@ -34,6 +34,9 @@ place, and small enough to hand to an assistant at the start of every session.
 - **Scopes keep work and life apart.** A personal record never appears in a project session, and a
   command reaching across scopes refuses by name instead of leaking the title.
 - **Sessions are records too.** What you did, what it touched and what it opened form one subgraph.
+- **Context by area.** Records carry area tags from a vocabulary the project keeps in its own repo;
+  `kb context <task>` lists what is known about those areas before the work starts, and `kb add`
+  refuses a record that duplicates an open one.
 - **Raw Cypher whenever you want it.** `kb query` reads and writes; the commands are a convenience,
   not a cage.
 - **Installed through Nix, database included.** One `nix profile install`, one `kb-setup`, no
@@ -71,10 +74,15 @@ kb done 283 "shipped in the September release"
 kb snooze 144 2026-09-19
 ```
 
+Outside the personal scope every record names at least one area (`--tag`): one of the project's,
+from its `.kb/tags.toml`, or a built-in one. `kb tags` lists them. A record too close to an open
+one is refused with the match (exit 5); `kb append` adds to that one, `--distinct` creates it
+anyway.
+
 Facts are the same command with a kind:
 
 ```sh
-kb add "Payment terms are shared across companies" --kind reference \
+kb add "Payment terms are shared across companies" --kind reference --tag billing \
   --summary "One term record serves every company, since the 2026 cleanup." --body-file note.md
 kb search "payment terms"
 kb show reference_payment_terms       # by slug or by id
@@ -84,7 +92,9 @@ kb links reference_payment_terms      # what it relates to, blocks or supersedes
 Every command explains itself with `--help`, and `kb --help` lists them all. Worth knowing beyond the
 above: `append` and `edit` grow a record, `archive`, `supersede` and `merge` retire one without
 deleting anything, `skip` closes a missed window, `promote` ties a thread to a ticket, `index` prints
-the summary an assistant reads at session start, `session` manages the session record, `backup` and
+the summary an assistant reads at session start, `context` lists what is known about a task's
+areas, `consolidate` proposes merges, condensing and archiving of knowledge records (and writes
+nothing), `tags` shows the vocabulary, `session` manages the session record, `backup` and
 `restore` handle the dumps, and `query` takes Cypher.
 
 ## How it is organised
@@ -102,6 +112,10 @@ snooze and sync, each one stamped with the session that wrote it.
 
 **Relationships** come from a closed vocabulary: `RELATED`, `SUPERSEDES`, `BLOCKS` and `PART_OF`,
 plus `OPENED_IN` and `TOUCHED`, which a session uses to say what it created and what it changed.
+
+**Tags** are closed too. An area tag names a module or subsystem and pulls context; a type tag
+(`bug`, `feature`, `docs`, …) says what kind of work it is. A project's areas live in
+`.kb/tags.toml` in its repository, so a team shares one list and changes it by pull request.
 
 The urgency table, the working-day calendar and the session rules are in
 [docs/model.md](docs/model.md).
@@ -143,8 +157,8 @@ resolve. Recipes in [docs/migration.md](docs/migration.md).
 
 ## More
 
-- [docs/model.md](docs/model.md) — records, schedules, urgency, sessions
-- [docs/configuration.md](docs/configuration.md) — every config key, the Odoo source
+- [docs/model.md](docs/model.md) — records, tags, duplicates, schedules, urgency, sessions
+- [docs/configuration.md](docs/configuration.md) — every config key, `.kb/tags.toml`, the Odoo source
 - [docs/install.md](docs/install.md) — what is written where, upgrading, footprint
 - [docs/migration.md](docs/migration.md) — importing a markdown memory
 - [docs/adr/](docs/adr/) — why the hard-to-reverse choices were made

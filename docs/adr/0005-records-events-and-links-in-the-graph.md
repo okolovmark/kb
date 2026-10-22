@@ -127,7 +127,8 @@ needs the schedule and the events of a task in one read.
 - One `MATCH` returns a task with everything the level needs; events come from a second
   pattern on the same id. No joins across schedule tables.
 - Range indexes on `Record.kind`, `Record.scope`, `Record.external_id`, `Event.kind`; the
-  full-text index `record_text` covers title and body; `(:Meta {name})` holds sync state.
+  full-text index `record_text` covers title and body (title, summary and body since ADR 0006);
+  `(:Meta {name})` holds sync state.
 - Skips are counted only when a standup runs; weeks without a session count as one skip.
 - Merging records moves events and edges by recreating them on the kept record; the
   dropped record keeps its own `created` event and gets an `archived` one. A merged-away
