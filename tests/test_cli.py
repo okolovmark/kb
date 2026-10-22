@@ -136,6 +136,32 @@ def test_status_exits_1_when_the_schema_is_incomplete(
     assert CliRunner().invoke(main, ["status"], obj=app).exit_code == 0
 
 
+@pytest.mark.usefixtures("cli_env")
+def test_status_exits_1_when_the_full_text_index_is_stale(
+    driver: Driver, tmp_path: Path, fake_systemctl
+) -> None:
+    """A release that changes the index definition: the name is there, the definition is not."""
+    bootstrap_schema(driver)
+    write_unit(tmp_path, os.environ["KB_NEO4J_PACKAGE"])
+    app = App(runner=RecordingRunner(fake_systemctl("active")), home=tmp_path)
+    driver.execute_query("DROP INDEX record_text", database_="neo4j")
+    driver.execute_query(
+        "CREATE FULLTEXT INDEX record_text FOR (r:Record) ON EACH [r.title, r.body]",
+        database_="neo4j",
+    )
+    try:
+        result = CliRunner().invoke(main, ["status"], obj=app)
+        assert result.exit_code == 1
+        assert "schema:       stale (record_text), run kb-setup" in result.output
+        info = json.loads(CliRunner().invoke(main, ["--json", "status"], obj=app).output)
+        assert info["schema_ok"] is True  # complete: every name is there
+        assert info["schema_stale"] == ["record_text"]
+    finally:
+        bootstrap_schema(driver)
+    info = json.loads(CliRunner().invoke(main, ["--json", "status"], obj=app).output)
+    assert info["schema_stale"] == []
+
+
 def test_status_exits_1_when_unit_is_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_systemctl
 ) -> None:

@@ -26,6 +26,7 @@ from kb.setup import (
     register_claude_plugin,
     render_conf,
     render_unit,
+    summary,
     write_if_changed,
 )
 
@@ -405,3 +406,13 @@ def test_install_antigravity_plugin_syncs_and_respects_dry_run(tmp_path: Path) -
     assert (dst / "plugin.json").read_text() == '{"name": "kb"}'
     assert (dst / "sidecars" / "panel" / "server.mjs").read_text() == "// server\n"
     assert install_antigravity_plugin(tmp_path, src).startswith("up to date")
+
+
+def test_summary_names_an_index_rebuilt_on_a_new_definition(tmp_path: Path) -> None:
+    cfg = load(path=tmp_path / "absent.toml", home=tmp_path)
+    paths = Paths.from_config(cfg, tmp_path)
+    pkg = Path(os.environ["KB_NEO4J_PACKAGE"])
+    plain = summary(cfg, paths, pkg, "active", 264, password_set=False)
+    assert "schema:" not in plain
+    rebuilt = summary(cfg, paths, pkg, "active", 264, password_set=False, recreated=["record_text"])
+    assert rebuilt.splitlines()[-1] == "schema:   rebuilt record_text on its new definition"

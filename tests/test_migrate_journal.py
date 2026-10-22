@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner, Result
 
+from conftest import with_area
 from kb import migrate_journal
 from kb.cli import main
 from kb.config import load
@@ -36,7 +37,7 @@ SUMMARY = (
 
 
 def kb(*args: str, code: int = 0) -> Result:
-    result = CliRunner().invoke(main, list(args))
+    result = CliRunner().invoke(main, with_area(list(args)))
     assert result.exit_code == code, result.output
     return result
 

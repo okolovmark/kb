@@ -12,7 +12,7 @@ kb-setup                                                      # idempotent; --dr
 
 `kb-setup` writes the files below, sets the initial password, enables the unit, waits for bolt and
 a `RETURN 1`, then creates the schema (constraints `record_id`, `record_slug`, `counter_name`,
-`meta_name`, `session_id`; full-text index `record_text` on title and body; range indexes
+`meta_name`, `session_id`; full-text index `record_text` on title, summary and body; range indexes
 `record_kind`, `record_scope`, `record_external_id`, `event_kind`) and the `Counter` node (value
 264, first allocated id 265). A re-run rewrites what changed and restarts a running service only
 when the unit or conf changed.
@@ -64,8 +64,9 @@ claude-plugin`.
 ## Checking on it
 
 `kb status` prints the unit state, bolt, the schema, the counter and the versions. It exits 1 when
-the unit is not active, bolt is unreachable, the schema is missing a constraint or index, or the
-unit runs an older neo4j than the installed package.
+the unit is not active, bolt is unreachable, the schema is missing a constraint or index, the
+full-text index has an older definition, or the unit runs an older neo4j than the installed
+package.
 
 `kb service start|stop|restart` drives `systemctl --user` on `neo4j-kb.service`; `start` and
 `restart` return once the database answers. `kb service logs [-n N] [-f]` is
@@ -104,6 +105,11 @@ kb-setup          # rewrites the unit for the new store path, restarts, re-runs 
 Until then `kb status` exits 1 with `upgrade: unit runs <old>, package is <new>: run kb-setup`.
 A release that adds a constraint or an index exits 1 the same way, through `schema: incomplete,
 run kb-setup`: a database keeps the schema it was bootstrapped with until `kb-setup` runs again.
+A release that changes the full-text index (properties or analyzer) says `schema: stale
+(record_text), run kb-setup` (`schema_stale` under `--json`); `kb-setup` drops the index,
+creates the new one, waits for it and prints `schema:   rebuilt record_text on its new
+definition`. Search keeps answering from the old index until then. `CREATE … IF NOT EXISTS`
+alone would never replace it: [adr/0006](adr/0006-search-stays-lexical-with-the-summary-indexed.md).
 
 ## Footprint (measured 2026-09-15, 412 records)
 

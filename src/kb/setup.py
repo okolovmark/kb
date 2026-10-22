@@ -273,17 +273,37 @@ def install(
 
     wait_until_ready(cfg, paths.auth_file)
     with connect(cfg, auth_file=paths.auth_file) as driver:
-        bootstrap_schema(driver)
+        recreated = bootstrap_schema(driver)
         counter = counter_value(driver)
 
-    click.echo(summary(cfg, paths, pkg, unit_state(runner), counter, password_set=fresh))
+    click.echo(
+        summary(
+            cfg,
+            paths,
+            pkg,
+            unit_state(runner),
+            counter,
+            password_set=fresh,
+            recreated=recreated,
+        )
+    )
 
 
 def summary(
-    cfg: Config, paths: Paths, pkg: Path, state: str, counter: int | None, *, password_set: bool
+    cfg: Config,
+    paths: Paths,
+    pkg: Path,
+    state: str,
+    counter: int | None,
+    *,
+    password_set: bool,
+    recreated: list[str] | None = None,
 ) -> str:
-    """The lines kb-setup prints at the end."""
+    """The lines kb-setup prints at the end; a ``schema:`` line when an index was rebuilt."""
     neo = cfg.neo4j
+    rebuilt = (
+        [f"schema:   rebuilt {', '.join(recreated)} on its new definition"] if recreated else []
+    )
     return "\n".join(
         [
             f"neo4j:    {neo4j_version(pkg)} ({pkg})",
@@ -294,6 +314,7 @@ def summary(
             f"auth:     {paths.auth_file}" + (" (initial password set)" if password_set else ""),
             f"bolt:     {BOLT_HOST}:{neo.bolt_port}   http: {BOLT_HOST}:{neo.http_port}",
             f"counter:  {counter}",
+            *rebuilt,
         ]
     )
 

@@ -1,7 +1,7 @@
 # Configuration
 
-Every key of `config.toml`, the environment variables that override it, and the optional Odoo
-source. Back to the [README](../README.md).
+Every key of `config.toml`, the environment variables that override it, a project's tag
+vocabulary, and the optional Odoo source. Back to the [README](../README.md).
 
 `~/.config/kb/config.toml`, override with `KB_CONFIG`. Missing file = defaults; unknown keys and
 wrong types are errors. `kb config init` writes this file, `kb config show` prints the effective
@@ -74,6 +74,27 @@ dir = "~/kb-backups"
 When nothing listens on the bolt port every command fails in under a second with `neo4j-kb is not
 reachable on bolt://127.0.0.1:<port>: kb status / kb service start`; `today`, `next`, `index` and
 `sync odoo` print that line on stderr and exit 0.
+
+## .kb/tags.toml
+
+A project's area tags, in its repository: `<[scopes] path>/.kb/tags.toml`. The project owns the
+file and changes it like code; kb only reads it, and `kb tags init` writes a seed when there is
+none.
+
+```toml
+[areas]
+billing = "invoices, bills and their payment terms"
+export = "the nightly export and its cron"
+```
+
+- One `[areas]` table, `name = "description"`. Anything else is an error naming the file, and
+  every `add` in that scope fails until it is fixed.
+- Names are lower case letters, digits, `_` and `-`, starting with a letter or digit. A name may
+  repeat a built-in area (the file's description wins), never a type tag.
+- Without the file a project scope has the built-in areas only. `global` and `personal` never
+  read one.
+
+What the tags mean and which commands check them: [model.md](model.md#tags).
 
 ## Raw Cypher
 

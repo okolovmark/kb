@@ -329,12 +329,25 @@ def test_promoted_record_keeps_its_text_and_is_never_closed(kb_env, odoo: FakeOd
     runner = CliRunner()
     mine = json.loads(
         runner.invoke(
-            main, ["--json", "add", "Ship the widget", "--scope", "proj", "--body", "plan"]
+            main,
+            [
+                "--json",
+                "add",
+                "Ship the widget",
+                "--scope",
+                "proj",
+                "--body",
+                "plan",
+                "--tag",
+                "demo",
+            ],
         ).stdout
     )["id"]
     runner.invoke(main, ["promote", str(mine), "KIO-1700"])
     outside = json.loads(
-        runner.invoke(main, ["--json", "add", "Other ticket", "--scope", "proj"]).stdout
+        runner.invoke(
+            main, ["--json", "add", "Other ticket", "--scope", "proj", "--tag", "demo"]
+        ).stdout
     )["id"]
     runner.invoke(main, ["promote", str(outside), "KIO-9999"])  # not in the result set
     result = runner.invoke(main, ["sync", "odoo"])
@@ -421,6 +434,8 @@ def test_two_records_on_one_odoo_id_are_both_kept_in_sync(kb_env, odoo: FakeOdoo
                     title,
                     "--scope",
                     "proj",
+                    "--tag",
+                    "demo",
                     "--source",
                     "odoo",
                     "--external-id",
@@ -583,6 +598,8 @@ def test_untracked_list_is_capped_and_printed_only_when_it_changes(kb_env, odoo:
                     f"old {n}",
                     "--scope",
                     "proj",
+                    "--tag",
+                    "demo",
                     "--source",
                     "odoo",
                     "--external-id",
@@ -616,3 +633,71 @@ def test_odoo_without_project_key_files_tasks_under_their_id(kb_env, odoo: FakeO
     tasks = odoo_tasks(kb_env)
     assert sorted(tasks) == ["101", "102", "103"]
     assert tasks["101"]["title"] == "101 First task"
+
+
+def test_a_new_ticket_like_an_open_thread_gets_one_duplicate_hint(kb_env, odoo: FakeOdoo) -> None:
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+
+    def add(title: str, *extra: str) -> int:
+        args = ["--json", "add", title, "--scope", "proj", "--tag", "demo", *extra]
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, result.output
+        return json.loads(result.stdout)["id"]
+
+    # the thread a ticket was filed for, never promoted: the sync brings the ticket in again
+    odoo.tasks[1]["name"] = "Keep the widget dates on a split order"
+    thread = add("Keep the widget dates on a split order")
+    # an Odoo task is the ticket itself: never the "old" side of the hint
+    add(
+        "Keep the widget dates on a split order",
+        "--source",
+        "odoo",
+        "--external-id",
+        "KIO-1009",
+        "--distinct",
+    )
+    add("Unrelated chore")
+    first = runner.invoke(main, ["sync", "odoo"])
+    assert first.exit_code == 0, first.output
+    new = odoo_tasks(kb_env)["KIO-1701"]["id"]
+    hints = [line for line in first.output.splitlines() if line.startswith("possible")]
+    title = "Keep the widget dates on a split order"
+    assert hints == [
+        f"possible duplicate: [{new}] KIO-1701 {title} ~ [{thread}] {title}: "
+        f"kb promote {thread} KIO-1701, then kb merge {new} {thread}"
+    ]
+    # once: the record exists now, the next run says nothing about it
+    second = runner.invoke(main, ["--json", "sync", "odoo"])
+    assert json.loads(second.stdout)["possible_duplicates"] == []
+
+
+def test_the_hint_skips_done_threads_and_other_scopes(kb_env, odoo: FakeOdoo) -> None:
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    done = json.loads(
+        runner.invoke(
+            main, ["--json", "add", "First task", "--scope", "proj", "--tag", "demo"]
+        ).stdout
+    )["id"]
+    runner.invoke(main, ["done", str(done)])
+    runner.invoke(main, ["add", "Keyless task", "--scope", "personal"])
+    result = runner.invoke(main, ["--json", "sync", "odoo"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["possible_duplicates"] == []
+
+
+def test_tagging_a_synced_task_keeps_its_title_following_odoo(kb_env, odoo: FakeOdoo) -> None:
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    runner.invoke(main, ["sync", "odoo"])
+    rid = str(odoo_tasks(kb_env)["KIO-1700"]["id"])
+    tagged = runner.invoke(main, ["edit", rid, "--tag", "demo"])
+    assert tagged.exit_code == 0, tagged.output
+    odoo.tasks[0]["name"] = "First task, renamed"
+    runner.invoke(main, ["sync", "odoo"])
+    assert odoo_tasks(kb_env)["KIO-1700"]["title"] == "KIO-1700 First task, renamed"
+    runner.invoke(main, ["edit", rid, "--summary", "mine now"])
+    odoo.tasks[0]["name"] = "First task, renamed twice"
+    runner.invoke(main, ["sync", "odoo"])
+    assert odoo_tasks(kb_env)["KIO-1700"]["title"] == "KIO-1700 First task, renamed"

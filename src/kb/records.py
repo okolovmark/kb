@@ -10,13 +10,14 @@ from typing import Any
 
 from dateutil.rrule import rrulestr
 from neo4j import ManagedTransaction
+from neo4j.exceptions import Neo4jError
 from neo4j.graph import Node
 from neo4j.time import Date, DateTime
 
 from kb import urgency
 from kb.calendar import local_date
 from kb.config import Config
-from kb.db import COUNTER_NAME, next_id
+from kb.db import COUNTER_NAME, FULLTEXT_INDEX, next_id
 
 KINDS = ("task", "note", "howto", "feedback", "reference", "decision", "session")
 LABELS = {kind: kind.capitalize() for kind in KINDS}
@@ -48,6 +49,11 @@ SESSION_SLUG = re.compile(r"^\d{4}-\d{2}-\d{2}-\d+$")
 SESSION_WINDOW = dt.timedelta(hours=24)
 WINDOW_ALIASES = {"weekend": "FREQ=WEEKLY;BYDAY=SA,SU", "sat,sun": "FREQ=WEEKLY;BYDAY=SA,SU"}
 REL_PATTERN = "|".join(REL_TYPES)
+# what kb context and kb consolidate read; kb index prints the same kinds by default
+KNOWLEDGE_KINDS = ("note", "howto", "feedback", "reference", "decision")
+# Lucene query syntax: escaped, a title is searched as the words it is made of
+LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)')
+LUCENE_OPERATORS = re.compile(r"\b(AND|OR|NOT|TO)\b")
 # tiebreaker for events written at the same instant in one command (shown + done)
 _SEQ = itertools.count()
 
@@ -101,6 +107,7 @@ class Record:
     closed_at: dt.datetime | None = None
     reason: str | None = None
     no_summary: bool = False
+    title_hint: str | None = None
 
     @classmethod
     def from_node(cls, node: Node) -> Record:
@@ -371,6 +378,21 @@ def graph_of(tx: ManagedTransaction, record_id: int, depth: int) -> list[Link]:
     return out
 
 
+def lucene_escape(text: str) -> str:
+    """*text* as plain words for the Lucene query parser: special characters escaped, the
+    operator words lowered (the analyzer lowers every term anyway)."""
+    escaped = LUCENE_SPECIAL.sub(r"\\\1", text)
+    return LUCENE_OPERATORS.sub(lambda m: m.group(1).lower(), escaped)
+
+
+def is_parse_error(exc: Neo4jError) -> bool:
+    """A query Lucene's parser rejected: queryNodes fails with ProcedureCallFailed and the
+    parser's exception in the message (an unbalanced quote, a ``/``, a leading ``*``)."""
+    return exc.code == "Neo.ClientError.Procedure.ProcedureCallFailed" and (
+        "queryparser" in (exc.message or "") or "ParseException" in (exc.message or "")
+    )
+
+
 def search(
     tx: ManagedTransaction,
     query: str,
@@ -380,9 +402,9 @@ def search(
     include_archived: bool,
     limit: int,
 ) -> list[tuple[Record, float]]:
-    """Full-text query over title+body through the ``record_text`` index."""
+    """Full-text query, raw Lucene syntax, over title, summary and body (``record_text``)."""
     rows = tx.run(
-        "CALL db.index.fulltext.queryNodes('record_text', $q) YIELD node, score "
+        f"CALL db.index.fulltext.queryNodes('{FULLTEXT_INDEX}', $q) YIELD node, score "
         "WHERE ($scopes IS NULL OR node.scope IN $scopes) "
         "AND ($kind IS NULL OR node.kind = $kind) "
         "AND ($all OR node.archived_at IS NULL) "
@@ -394,6 +416,41 @@ def search(
         limit=limit,
     )
     return [(Record.from_node(row["node"]), row["score"]) for row in rows]
+
+
+def tagged(
+    tx: ManagedTransaction,
+    scopes: list[str] | None,
+    kinds: tuple[str, ...],
+    tags: list[str],
+    *,
+    open_only: bool = False,
+) -> list[Record]:
+    """Non-archived records of *kinds* in the view carrying any of *tags* (and not done, with
+    *open_only*), by id."""
+    rows = tx.run(
+        "MATCH (r:Record) WHERE r.kind IN $kinds AND r.archived_at IS NULL "
+        "AND any(t IN coalesce(r.tags, []) WHERE t IN $tags) "
+        "AND ($scopes IS NULL OR r.scope IN $scopes) AND (NOT $open OR r.done_at IS NULL) "
+        "RETURN r ORDER BY r.id",
+        kinds=list(kinds),
+        tags=tags,
+        scopes=scopes,
+        open=open_only,
+    )
+    return [Record.from_node(row["r"]) for row in rows]
+
+
+def tag_counts(tx: ManagedTransaction, scopes: list[str] | None) -> dict[str, int]:
+    """``{tag: records carrying it}`` over the non-archived records in the view, sessions left
+    out (their tags came with the journal migration)."""
+    rows = tx.run(
+        "MATCH (r:Record) WHERE r.kind <> 'session' AND r.archived_at IS NULL "
+        "AND ($scopes IS NULL OR r.scope IN $scopes) "
+        "UNWIND coalesce(r.tags, []) AS tag RETURN tag, count(*) AS n",
+        scopes=scopes,
+    )
+    return {row["tag"]: row["n"] for row in rows}
 
 
 def open_tasks(tx: ManagedTransaction, scopes: list[str] | None) -> list[Record]:
@@ -540,12 +597,14 @@ def create(
     synced_at: dt.datetime | None = None,
     origin: str | None = None,
     note: str | None = None,
+    payload: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> Record:
     """Create ``(:Record:<Kind>)`` with the next id (or *record_id*) and its ``created`` event.
 
-    *note* goes on the ``created`` event (the migrations name the source file there);
-    *extra* holds kind-specific properties (the session fields), set as given.
+    *note* and *payload* go on the ``created`` event (the migrations name the source file
+    there, ``add --distinct`` the similar records it was told about); *extra* holds
+    kind-specific properties (the session fields), set as given.
 
     Non-task kinds get a slug: the given one, or one derived from the title and made unique.
     A session's slug is given and kept verbatim (``YYYY-MM-DD-<n>``), its *source* is the
@@ -597,7 +656,7 @@ def create(
         if props["sched"] == "age" and props.get("anchor") is None:
             raise RecordError("an age task needs an anchor date")
     tx.run(f"CREATE (r:Record:{LABELS[kind]}) SET r = $props", props=props)
-    add_event(tx, rid, "created", created, note=note, session=session)
+    add_event(tx, rid, "created", created, note=note, payload=payload, session=session)
     return get(tx, rid)
 
 

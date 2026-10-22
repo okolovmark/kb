@@ -11,7 +11,7 @@ from typing import Any
 
 from neo4j import ManagedTransaction
 
-from kb import records
+from kb import records, similar
 from kb.calendar import local_date
 from kb.config import Config, OdooSource
 
@@ -32,6 +32,31 @@ class SyncError(Exception):
     """Anything that stops a sync: config, auth file, network, RPC fault, bad payload."""
 
 
+@dataclass(frozen=True)
+class Duplicate:
+    """A task the sync just created for a new ticket, and the open thread it resembles."""
+
+    new: records.Record
+    old: records.Record
+    key: str
+    similarity: float
+
+    def line(self) -> str:
+        return (
+            f"possible duplicate: [{self.new.id}] {self.new.title} ~ [{self.old.id}] "
+            f"{self.old.title}: kb promote {self.old.id} {self.key}, "
+            f"then kb merge {self.new.id} {self.old.id}"
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "new": self.new.id,
+            "old": self.old.id,
+            "key": self.key,
+            "similarity": round(self.similarity, 3),
+        }
+
+
 @dataclass
 class SyncResult:
     """Counts of one successful sync."""
@@ -42,6 +67,7 @@ class SyncResult:
     closed: list[int] = field(default_factory=list)
     untracked: list[int] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    duplicates: list[Duplicate] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -51,6 +77,7 @@ class SyncResult:
             "closed": self.closed,
             "untracked": self.untracked,
             "skipped": self.skipped,
+            "possible_duplicates": [d.to_json() for d in self.duplicates],
         }
 
     def summary(self, *, previous_untracked: int | None) -> list[str]:
@@ -69,6 +96,8 @@ class SyncResult:
             lines.append(
                 f"{len(self.untracked)} untracked odoo records (not in the result set): {shown}"
             )
+        # once: a hint belongs to the run that created the record, the next run is silent
+        lines += [d.line() for d in self.duplicates]
         return lines
 
 
@@ -227,7 +256,23 @@ def desired_props(row: dict[str, Any], cfg: Config) -> dict[str, Any]:
 
 SYNCED_FIELDS = ("sched", "due", "anchor", "stage")
 LOCAL_AUTHORSHIP = ("edited", "promoted")
+# tagging a ticket is how it is taken into work (kb context asks for it), not a rewrite
+NOT_AUTHORSHIP_FIELDS = frozenset({"tags"})
 ORIGIN = "odoo-sync"
+
+
+def authored_locally(event: records.Event) -> bool:
+    """An edit or a promote, except an edit of the tags alone."""
+    if event.kind not in LOCAL_AUTHORSHIP:
+        return False
+    if event.kind == "edited":
+        return bool(set(event.data.get("fields", [])) - NOT_AUTHORSHIP_FIELDS)
+    return True
+
+
+def view_of(scope: str) -> list[str]:
+    """The scope a synced task lands in, plus global (ADR 0003)."""
+    return ["global"] if scope == "global" else [scope, "global"]
 
 
 def upsert(
@@ -258,6 +303,7 @@ def upsert(
             by_external.setdefault(rec.external_id, []).append(rec)
     events = records.events_for(tx, [r.id for r in existing])
     matched: set[int] = set()
+    corpus: similar.Corpus | None = None
     for row in rows:
         try:
             props = desired_props(row, cfg)
@@ -287,6 +333,10 @@ def upsert(
                 origin=ORIGIN,
             )
             result.created.append(rec.id)
+            corpus = corpus or similar.Corpus.load(tx)
+            _check_duplicate(
+                tx, corpus, rec, key=props["external_id"], scope=odoo.scope, result=result
+            )
             continue
         for current in group:
             matched.add(current.id)
@@ -311,6 +361,33 @@ def upsert(
     return result
 
 
+def _check_duplicate(
+    tx: ManagedTransaction,
+    corpus: similar.Corpus,
+    rec: records.Record,
+    *,
+    key: str,
+    scope: str,
+    result: SyncResult,
+) -> None:
+    """The duplicate check of ``kb add``, against the open threads that are not Odoo tasks:
+    a ticket filed for a thread nobody promoted arrives as a second task (five of the six
+    duplicates merged by 2026-10-22 came in this way, the sixth through kb add)."""
+    found = similar.find(
+        tx,
+        corpus,
+        title=rec.title,
+        summary=None,
+        kind="task",
+        scopes=view_of(scope),
+        exclude=[rec.id],
+        no_odoo=True,
+        limit=1,
+    )
+    if found:
+        result.duplicates.append(Duplicate(rec, found[0].record, key, found[0].similarity))
+
+
 def _refresh(
     tx: ManagedTransaction,
     current: records.Record,
@@ -326,7 +403,7 @@ def _refresh(
     changed = {k: props[k] for k in SYNCED_FIELDS if getattr(current, k) != props[k]}
     if current.external_id != props["external_id"]:
         changed["external_id"] = props["external_id"]
-    authored = current.origin != ORIGIN or any(e.kind in LOCAL_AUTHORSHIP for e in history)
+    authored = current.origin != ORIGIN or any(authored_locally(e) for e in history)
     if not authored and current.title != props["title"]:
         changed["title"] = props["title"]
     if current.done_at is not None:
