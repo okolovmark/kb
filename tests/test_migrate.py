@@ -165,14 +165,19 @@ def test_counter_option_sets_the_counter_or_refuses(kb_env) -> None:
         real.output.strip() == "created 8 tasks (2 closed), skipped 0 existing; counter set to 267"
     )
     assert counter_value(kb_env.driver) == 267
-    fresh = runner.invoke(main, ["--json", "add", "after the migration", "--scope", "proj"])
+    fresh = runner.invoke(
+        main, ["--json", "add", "after the migration", "--scope", "proj", "--tag", "demo"]
+    )
     assert json.loads(fresh.stdout)["id"] == 268
 
 
 def test_counter_option_never_drops_below_existing_records(kb_env) -> None:
     runner = CliRunner()
     for n in range(6):  # ids 265..270
-        assert runner.invoke(main, ["add", f"task {n}", "--scope", "proj"]).exit_code == 0
+        assert (
+            runner.invoke(main, ["add", f"task {n}", "--scope", "proj", "--tag", "demo"]).exit_code
+            == 0
+        )
     assert counter_value(kb_env.driver) == 270
     for args in (["--counter", "267"], ["--counter", "267", "--dry-run"]):
         low = runner.invoke(main, ["migrate", "state", str(FIXTURE), "--scope", "proj", *args])
@@ -187,5 +192,5 @@ def test_counter_option_never_drops_below_existing_records(kb_env) -> None:
     )
     assert ok.exit_code == 0, ok.output
     assert counter_value(kb_env.driver) == 300
-    fresh = runner.invoke(main, ["--json", "add", "after", "--scope", "proj"])
+    fresh = runner.invoke(main, ["--json", "add", "after", "--scope", "proj", "--tag", "demo"])
     assert fresh.exit_code == 0 and json.loads(fresh.stdout)["id"] == 301

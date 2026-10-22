@@ -8,13 +8,14 @@ from typing import Any
 import pytest
 from click.testing import CliRunner, Result
 
+from conftest import with_area
 from kb.cli import main
 
 MONDAY = "2026-09-14"  # KB_TODAY in kb_env
 
 
 def kb(*args: str, code: int = 0, obj: Any = None, stdin: str | None = None) -> Result:
-    result = CliRunner().invoke(main, list(args), obj=obj, input=stdin)
+    result = CliRunner().invoke(main, with_area(list(args)), obj=obj, input=stdin)
     assert result.exit_code == code, result.output
     return result
 
@@ -75,9 +76,12 @@ def test_add_scope_from_cwd_and_refusal_outside(kb_env, monkeypatch) -> None:
 def test_add_non_task_kinds_get_unique_slugs_and_pins() -> None:
     first = kb("add", "Deploy Checklist: prod!", "--kind", "howto", "--scope", "proj")
     assert first.output.strip().endswith("] Deploy Checklist: prod!  (deploy_checklist_prod)")
-    second = kb_json("add", "Deploy checklist prod", "--kind", "howto", "--scope", "proj")
+    # the same title twice more: only --distinct gets past the duplicate check
+    second = kb_json(
+        "add", "Deploy checklist prod", "--kind", "howto", "--scope", "proj", "--distinct"
+    )
     assert second["slug"] == "deploy_checklist_prod_2"
-    third = kb_json("add", "Deploy checklist prod", "-k", "howto", "--scope", "proj")
+    third = kb_json("add", "Deploy checklist prod", "-k", "howto", "--scope", "proj", "--distinct")
     assert third["slug"] == "deploy_checklist_prod_3"
     fb = kb_json("add", "Never post creds", "--kind", "feedback", "--scope", "global")
     assert fb["pinned"] is True
@@ -89,7 +93,7 @@ def test_add_non_task_kinds_get_unique_slugs_and_pins() -> None:
     assert unpinned["slug"] == "my_slug"
     assert kb_json("show", "my_slug")["id"] == unpinned["id"]
     assert (
-        kb_json("add", "Pinned note", "--kind", "note", "--pin", "--scope", "proj")["pinned"]
+        kb_json("add", "Pinned reminder", "--kind", "note", "--pin", "--scope", "proj")["pinned"]
         is True
     )
     assert kb("add", "t", "--slug", "x", "--scope", "proj", code=2).output.count("non-task") == 1
@@ -101,8 +105,10 @@ def test_add_non_task_kinds_get_unique_slugs_and_pins() -> None:
         kb_json("add", "2026", "--kind", "note", "--slug", "year_2026", "--scope", "proj")["slug"]
         == "year_2026"
     )
-    tagged = kb_json("add", "Tagged", "--tag", "a", "--tag", "a", "--tag", "b", "--scope", "proj")
-    assert tagged["tags"] == ["a", "b"]
+    tagged = kb_json(
+        "add", "Tagged", "--tag", "demo", "--tag", "Demo", "--tag", "bug", "--scope", "proj"
+    )
+    assert tagged["tags"] == ["demo", "bug"]
 
 
 @pytest.mark.usefixtures("kb_env")
@@ -186,7 +192,7 @@ def test_add_schedule_flags() -> None:
 )
 @pytest.mark.usefixtures("kb_env")
 def test_add_rejects_bad_flag_combinations(args: list[str], message: str) -> None:
-    result = CliRunner().invoke(main, ["add", "t", "--scope", "proj", *args])
+    result = CliRunner().invoke(main, ["add", "t", "--scope", "proj", "--tag", "demo", *args])
     assert result.exit_code in (1, 2), result.output
     assert message in result.output
     assert "Traceback" not in result.output
@@ -205,14 +211,16 @@ def test_add_with_body_and_links() -> None:
         "--link",
         f"related:{target}",
         "--tag",
-        "a",
+        "demo",
         "--tag",
-        "b",
+        "bug",
     )
-    assert rec["tags"] == ["a", "b"]
+    assert rec["tags"] == ["demo", "bug"]
     assert rec["body"] == ""  # empty stdin under CliRunner
     piped = CliRunner().invoke(
-        main, ["add", "Piped", "--scope", "proj", "--body", "-"], input="line one\nline two\n"
+        main,
+        ["add", "Piped", "--scope", "proj", "--tag", "demo", "--body", "-"],
+        input="line one\nline two\n",
     )
     assert piped.exit_code == 0, piped.output
     links = kb("links", str(rec["id"])).output.strip()
@@ -279,12 +287,12 @@ def test_edit_opens_the_editor_when_no_flag_is_given(monkeypatch) -> None:
 
 @pytest.mark.usefixtures("kb_env")
 def test_show_text_layout() -> None:
-    rid = str(add("Taxes", "--due", "2026-09-16", "--tag", "money", "--body", "pay them"))
+    rid = str(add("Taxes", "--due", "2026-09-16", "--tag", "finance", "--body", "pay them"))
     other = str(add("Other"))
     kb("link", rid, "blocks", other)
     out = kb("show", rid).output.splitlines()
     assert out[0] == f"[{rid}] Taxes"
-    assert out[1] == "kind: task  scope: proj  slug: -  tags: money  pinned: no  source: manual"
+    assert out[1] == "kind: task  scope: proj  slug: -  tags: finance  pinned: no  source: manual"
     assert out[2] == "schedule: hard due 2026-09-16 days=work"
     assert out[3] == "urgency: L3 loud — T-2"
     assert out[4].startswith("created: 2026-") and "updated: 2026-" in out[4]

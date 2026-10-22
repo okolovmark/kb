@@ -1,5 +1,6 @@
 """One throwaway Neo4j per test run, started from $KB_NEO4J_PACKAGE on ephemeral ports."""
 
+import itertools
 import os
 import shutil
 import socket
@@ -26,6 +27,20 @@ from kb.runner import Call, Completed
 from kb.setup import conf_settings, package_default_conf, render_conf
 
 START_TIMEOUT = 120
+# kb add needs an area tag outside the personal scope; tests that are not about tags give an
+# untagged add this built-in area, which every scope accepts
+DEFAULT_AREA = "tooling"
+# the project area the kb_env fixture's .kb/tags.toml defines for scope `proj`
+PROJECT_AREA = "demo"
+
+
+def with_area(args: list[str]) -> list[str]:
+    """*args* plus ``--tag DEFAULT_AREA`` when they are an add without --tag outside personal."""
+    if "add" not in args[:2] or "--tag" in args:
+        return args
+    if any(a == "--scope" and b == "personal" for a, b in itertools.pairwise(args)):
+        return args
+    return [*args, "--tag", DEFAULT_AREA]
 
 
 @dataclass(frozen=True)
@@ -153,8 +168,8 @@ class KbEnv:
 def kb_env(
     neo4j_server: Neo4jServer, driver: Driver, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> KbEnv:
-    """Schema in place, no Record/Event/Meta nodes, Counter at 264, a config with scope `proj`,
-    today 2026-09-14."""
+    """Schema in place, no Record/Event/Meta nodes, Counter at 264, a config with scope `proj`
+    (its .kb/tags.toml defines the area `demo`), today 2026-09-14."""
     bootstrap_schema(driver)
     driver.execute_query(
         "MATCH (n) WHERE n:Record OR n:Event OR n:Meta DETACH DELETE n", database_="neo4j"
@@ -166,7 +181,8 @@ def kb_env(
         database_="neo4j",
     )
     proj = tmp_path / "proj"
-    proj.mkdir()
+    (proj / ".kb").mkdir(parents=True)
+    (proj / ".kb" / "tags.toml").write_text(f'[areas]\n{PROJECT_AREA} = "the demo module"\n')
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         f"[neo4j]\nbolt_port = {neo4j_server.bolt_port}\nhttp_port = {neo4j_server.http_port}\n"

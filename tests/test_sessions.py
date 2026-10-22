@@ -7,13 +7,14 @@ from typing import Any
 import pytest
 from click.testing import CliRunner, Result
 
+from conftest import with_area
 from kb.cli import main
 
 MONDAY = "2026-09-14"  # KB_TODAY in kb_env
 
 
 def kb(*args: str, code: int = 0, stdin: str | None = None) -> Result:
-    result = CliRunner().invoke(main, list(args), input=stdin)
+    result = CliRunner().invoke(main, with_area(list(args)), input=stdin)
     assert result.exit_code == code, result.output
     return result
 
@@ -81,6 +82,30 @@ def test_open_numbers_by_day_and_is_idempotent_on_the_id() -> None:
     )
     assert kb("show", "2026-09-14-1").output.splitlines()[2].startswith("session: abc  opened: ")
     assert kb("show", "2026-09-14-1").output.splitlines()[2].endswith("  open")
+
+
+@pytest.mark.usefixtures("kb_env")
+def test_open_stores_the_apps_title_as_a_hint() -> None:
+    def hint(*extra: str) -> Any:
+        args = ["session", "open", "--scope", "proj", "--id", "t1", "--source", "startup"]
+        return kb_json(*args, *extra)["title_hint"]
+
+    assert hint("--title", "  [child]   kb: build  the PR ") == "[child] kb: build the PR"
+    rec = kb_json("show", "2026-09-14-1")
+    assert rec["title"] == "session 2026-09-14 1 (startup)"  # the title stays Claude's to write
+    assert kb("show", "2026-09-14-1").output.splitlines()[3] == (
+        "title hint: [child] kb: build the PR"
+    )
+    assert hint() == "[child] kb: build the PR"  # a resume without --title keeps it
+    assert hint("--title", "renamed in the app") == "renamed in the app"
+    kb("session", "close", "--id", "t1")
+    assert hint("--title", "x" * 200) == "x" * 120
+    assert (
+        kb_json("session", "open", "--scope", "proj", "--id", "t2", "--source", "startup")[
+            "title_hint"
+        ]
+        is None
+    )
 
 
 @pytest.mark.usefixtures("kb_env")
@@ -313,7 +338,9 @@ def test_latest_open_session_in_the_view_is_the_default(kb_env, monkeypatch) -> 
     kb("session", "close", "--id", "s2")
     assert session_of(add("Down to the first")) == "2026-09-14-1"
     kb("session", "close", "--id", "s1")
-    assert session_of(kb_json("add", "Mine too", "--scope", "personal")["id"]) == "2026-09-14-3"
+    assert (
+        session_of(kb_json("add", "Also personal", "--scope", "personal")["id"]) == "2026-09-14-3"
+    )
     assert session_of(add("Nobody")) is None  # only p1 is left, and personal is out of the view
     assert last_event_session(str(add("Unstamped"))) is None
     # an open session older than 24 hours is not the current one

@@ -25,13 +25,16 @@ from neo4j.time import Date, DateTime, Duration, Time
 
 from kb import (
     calendar,
+    consolidate,
     db,
     migrate,
     migrate_journal,
     migrate_nodes,
     records,
     service,
+    similar,
     sync_odoo,
+    tags,
     urgency,
 )
 from kb.config import Config, ConfigError, dump_toml, load, render_default, to_plain
@@ -39,6 +42,10 @@ from kb.paths import Paths, neo4j_package, neo4j_version
 from kb.runner import Runner, SubprocessRunner, format_process_error
 
 T = TypeVar("T")
+
+# beyond click's 1 (error) and 2 (usage): the two refusals an agent is expected to act on
+EXIT_TAGS = 4
+EXIT_SIMILAR = 5
 
 
 def kb_version() -> str:
@@ -134,11 +141,21 @@ class App:
 pass_app = click.make_pass_decorator(App)
 
 
+class TagRefusal(click.ClickException):
+    """A tag outside the vocabulary, or no area tag where one is needed: exit 4."""
+
+    exit_code = EXIT_TAGS
+
+
 @contextmanager
 def cli_errors() -> Iterator[None]:
     """Turn subprocess, driver and file errors into one-line click errors."""
     try:
         yield
+    except tags.TagError as exc:
+        raise TagRefusal(str(exc)) from exc
+    except tags.VocabularyError as exc:
+        raise click.ClickException(str(exc)) from exc
     except subprocess.CalledProcessError as exc:
         raise click.ClickException(format_process_error(exc)) from exc
     except FileNotFoundError as exc:
@@ -165,8 +182,8 @@ def main(ctx: click.Context, as_json: bool) -> None:
 
 
 @main.command(
-    help="Service, bolt, schema, counter, versions; exit 1 when the service is down "
-    "or the unit runs an older neo4j than the installed package."
+    help="Service, bolt, schema, counter, versions; exit 1 when the service is down, the "
+    "schema is incomplete or stale, or the unit runs an older neo4j than the installed package."
 )
 @pass_app
 def status(app: App) -> None:
@@ -184,6 +201,7 @@ def status(app: App) -> None:
         "bolt": db.bolt_uri(cfg.neo4j.bolt_port),
         "bolt_reachable": reachable,
         "schema_ok": None,
+        "schema_stale": [],
         "constraints": [],
         "counter": None,
         "neo4j": neo4j_version(pkg) if pkg else "unknown",
@@ -208,9 +226,11 @@ def status(app: App) -> None:
             f"{neo4j_version(pkg)}: run kb-setup"
         )
     app.emit(info, "\n".join(lines))
-    # an incomplete schema is as actionable as a pending upgrade: a release that adds a
-    # constraint leaves the database short of it until kb-setup runs, and nothing else says so
-    if state != "active" or not reachable or upgrade_pending or info["schema_ok"] is False:
+    # an incomplete or stale schema is as actionable as a pending upgrade: a release that adds
+    # a constraint or changes the full-text index leaves the database behind until kb-setup
+    # runs, and nothing else says so
+    unhealthy = state != "active" or not reachable or upgrade_pending
+    if unhealthy or info["schema_ok"] is False or info["schema_stale"]:
         sys.exit(1)
 
 
@@ -219,6 +239,7 @@ def _probe_schema(app: App, info: dict[str, Any]) -> None:
         with app.driver() as driver:
             info["constraints"] = sorted(db.constraint_names(driver))
             info["schema_ok"] = db.schema_present(driver)
+            info["schema_stale"] = db.stale_indexes(driver)
             info["counter"] = db.counter_value(driver)
     except (Neo4jError, DriverError, ValueError) as exc:
         info["error"] = str(exc)
@@ -229,7 +250,11 @@ def _schema_line(info: dict[str, Any]) -> str:
         return f"error: {info['error']}"
     if info["schema_ok"] is None:
         return "unknown"
-    return "ok" if info["schema_ok"] else "incomplete, run kb-setup"
+    if not info["schema_ok"]:
+        return "incomplete, run kb-setup"
+    if info["schema_stale"]:
+        return f"stale ({', '.join(info['schema_stale'])}), run kb-setup"
+    return "ok"
 
 
 def _neo4j_package_or_none() -> Path | None:
@@ -643,6 +668,32 @@ def parse_link(spec: str) -> tuple[str, str]:
 ADD_KINDS = tuple(k for k in records.KINDS if k != "session")  # sessions: kb session open
 
 
+class SimilarRecordsError(Exception):
+    """The duplicate check found similar open records; the transaction writes nothing."""
+
+    def __init__(self, found: list[similar.Similar]) -> None:
+        super().__init__(f"{len(found)} similar records")
+        self.found = found
+
+
+def similar_line(found: similar.Similar) -> str:
+    rec = found.record
+    return f"similar: [{rec.id}] {rec.kind} {rec.title}"
+
+
+def refuse_similar(app: App, found: list[similar.Similar]) -> None:
+    """Up to SHOWN lines and the hint on stderr, or ``{"similar": [...]}``; exit 5."""
+    if app.as_json:
+        click.echo(json.dumps({"similar": [f.to_json() for f in found]}, ensure_ascii=False))
+    else:
+        for line in map(similar_line, found):
+            click.echo(line, err=True)
+        click.echo(
+            f"hint: kb append {found[0].record.id} TEXT, or re-run with --distinct", err=True
+        )
+    click.get_current_context().exit(EXIT_SIMILAR)
+
+
 @main.command(help="Create a record (a task unless --kind); prints [id] title (slug).")
 @click.argument("title")
 @click.option("--kind", "-k", type=click.Choice(ADD_KINDS), default="task", show_default=True)
@@ -652,7 +703,13 @@ ADD_KINDS = tuple(k for k in records.KINDS if k != "session")  # sessions: kb se
 @click.option("--summary", help="One line shown by index and show.")
 @click.option("--slug", help="Non-task kinds only; derived from the title when omitted.")
 @click.option("--pin/--no-pin", "pin", default=None, help="Default: pinned for feedback only.")
-@click.option("--tag", "tags", multiple=True, help="Repeatable.")
+@click.option(
+    "--tag",
+    "tag_names",
+    multiple=True,
+    help="Repeatable; from the scope's vocabulary (kb tags). One area tag is required except "
+    "in the personal scope.",
+)
 @click.option("--link", "links", multiple=True, metavar="REL:REF", help="Repeatable.")
 @click.option("--due", metavar="DATE", help="Hard deadline (screams on and after the date).")
 @click.option("--plan", metavar="DATE", help="Soft date (asks to rebalance or close after it).")
@@ -665,6 +722,12 @@ ADD_KINDS = tuple(k for k in records.KINDS if k != "session")  # sessions: kb se
 @click.option("--source", type=click.Choice(records.SOURCES), default="manual", show_default=True)
 @click.option("--external-id", help="e.g. KIO-1700 with --source odoo.")
 @click.option("--journal-ref", metavar="R", help="e.g. journal/2026-09-10.")
+@click.option(
+    "--distinct",
+    is_flag=True,
+    help="Create it although similar open records exist (exit 5 otherwise); the created "
+    "event names them.",
+)
 @json_option
 @pass_app
 def add(
@@ -678,7 +741,7 @@ def add(
     summary: str | None,
     slug: str | None,
     pin: bool | None,
-    tags: tuple[str, ...],
+    tag_names: tuple[str, ...],
     links: tuple[str, ...],
     due: str | None,
     plan: str | None,
@@ -691,8 +754,10 @@ def add(
     source: str,
     external_id: str | None,
     journal_ref: str | None,
+    distinct: bool,
 ) -> None:
-    """Create the record, its created event and any --link edges in one transaction."""
+    """Check the tags, refuse when similar open records exist (unless --distinct), then create
+    the record, its created event and any --link edges in one transaction."""
     cfg = app.cfg
     scope = write_scope(cfg, scope_flag)
     scopes, _ = view_scopes(cfg, scope_flag)
@@ -718,10 +783,23 @@ def add(
             raise click.UsageError("--slug applies to non-task kinds")
         if pin is not None and kind == "task":
             raise click.UsageError("--pin/--no-pin apply to non-task kinds")
-        unique_tags = list(dict.fromkeys(tags))
+        vocab = tags.load(cfg, scope)
+        unique_tags = vocab.check(list(tag_names))
+        tags.require_area(vocab, kind, unique_tags, "kb add")
+        clean_summary = records.check_summary(summary)
 
         def work(tx: ManagedTransaction) -> records.Record:
             current = app.current_session(tx, scopes, at)
+            found = similar.find(
+                tx,
+                similar.Corpus.load(tx),
+                title=title,
+                summary=clean_summary,
+                kind=kind,
+                scopes=scopes,
+            )
+            if found and not distinct:
+                raise SimilarRecordsError(found)
             rec = records.create(
                 tx,
                 kind=kind,
@@ -729,7 +807,7 @@ def add(
                 title=title,
                 at=at,
                 body=text,
-                summary=records.check_summary(summary),
+                summary=clean_summary,
                 slug=slug,
                 pinned=pin,
                 tags=unique_tags,
@@ -738,6 +816,11 @@ def add(
                 journal_ref=journal_ref,
                 schedule=schedule,
                 session=app.stamp_of(current),
+                payload=(
+                    {"distinct": True, "similar": [f.record.id for f in found]}
+                    if distinct
+                    else None
+                ),
             )
             for rel, ref in link_specs:
                 target = records.resolve(tx, ref, scopes)
@@ -755,7 +838,11 @@ def add(
             touch_session(tx, current, at, rec.id, created=True)
             return rec
 
-        rec = app.write(work)
+        try:
+            rec = app.write(work)
+        except SimilarRecordsError as refused:
+            refuse_similar(app, refused.found)
+            return
     emit_record(app, rec)
 
 
@@ -793,18 +880,49 @@ def append(app: App, ref: str, text: str, scope_flag: str | None) -> None:
     emit_record(app, rec)
 
 
+def edited_tags(
+    cfg: Config, rec: records.Record, add_tags: tuple[str, ...], drop_tags: tuple[str, ...]
+) -> list[str]:
+    """The record's tags after --untag and --tag. Added tags must be in the vocabulary of the
+    record's scope; tags it already carries stay whatever they are. Removing the last area
+    tag from a record that needs one is refused."""
+    if not add_tags and not drop_tags:
+        return rec.tags
+    vocab = tags.load(cfg, rec.scope)
+    added = vocab.check(list(add_tags))
+    dropped = {t.strip().lower() for t in drop_tags}
+    result = [t for t in rec.tags if t not in dropped]
+    result += [t for t in added if t not in result]
+    if (
+        tags.requires_area(rec.kind, rec.scope)
+        and vocab.area_tags(rec.tags)
+        and not vocab.area_tags(result)
+    ):
+        raise tags.TagError(
+            f"[{rec.id}] would be left without an area tag; add another with --tag AREA first; "
+            f"{vocab.listing()}"
+        )
+    return result
+
+
 def append_paragraph(body: str, today: dt.date, text: str) -> str:
     """body += ``\\n\\n**<today>:** TEXT``."""
     paragraph = f"**{today}:** {text}"
     return f"{body}\n\n{paragraph}" if body else paragraph
 
 
-@main.command(help="Change the title, summary or body; with no flag, open $EDITOR on the body.")
+@main.command(
+    help="Change the title, summary, body or tags; with no flag, open $EDITOR on the body."
+)
 @click.argument("ref")
 @click.option("--title")
 @click.option("--summary", help="One line; an empty string clears it.")
 @click.option("--body-file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--body", help="Body text; '-' reads stdin.")
+@click.option(
+    "--tag", "add_tags", multiple=True, help="Add a tag from the record's vocabulary; repeatable."
+)
+@click.option("--untag", "drop_tags", multiple=True, help="Remove a tag; repeatable.")
 @scope_option
 @json_option
 @pass_app
@@ -816,6 +934,8 @@ def edit(
     summary: str | None,
     body_file: Path | None,
     body: str | None,
+    add_tags: tuple[str, ...],
+    drop_tags: tuple[str, ...],
     scope_flag: str | None,
 ) -> None:
     """Write only what changed; an edited event only when something did."""
@@ -824,7 +944,9 @@ def edit(
     new_body = read_body(body, body_file)
     with cli_errors():
         rec = app.read(lambda tx: records.resolve(tx, ref, scopes))
-        if title is None and summary is None and new_body is None:
+        new_tags = edited_tags(app.cfg, rec, add_tags, drop_tags)
+        nothing = title is None and summary is None and new_body is None
+        if nothing and not add_tags and not drop_tags:
             edited = click.edit(rec.body, extension=".md")
             new_body = edited if edited is not None else rec.body
             if new_body.endswith("\n") and not rec.body.endswith("\n"):
@@ -836,6 +958,8 @@ def edit(
             changes["summary"] = records.check_summary(summary)
         if new_body is not None and new_body != rec.body:
             changes["body"] = new_body
+        if new_tags != rec.tags:
+            changes["tags"] = new_tags
         if not changes:
             emit_record(app, rec, "  unchanged")
             return
@@ -954,6 +1078,8 @@ def session_state_line(rec: records.Record) -> str:
         line += f"  reason: {rec.reason}"
     if rec.no_summary:
         line += "  no summary"
+    if rec.title_hint:
+        line += f"\ntitle hint: {rec.title_hint}"
     return line
 
 
@@ -991,7 +1117,10 @@ def event_line(event: records.Event) -> str:
     return "  ".join(parts)
 
 
-@main.command(help="Full-text search over title and body (Lucene syntax).")
+@main.command(
+    help="Full-text search over title, summary and body: Lucene syntax, and the words as plain "
+    "text when Lucene cannot parse them."
+)
 @click.argument("query_text", metavar="QUERY")
 @click.option("--scope", "scope_flag")
 @click.option("--kind", type=click.Choice(records.KINDS))
@@ -1008,22 +1137,33 @@ def search(
     include_archived: bool,
     limit: int,
 ) -> None:
-    """Lines ``[id] kind slug title  score``; the scope filter of today/index applies."""
+    """Lines ``[id] kind slug title  score``; the scope filter of today/index applies.
+
+    The query goes to Lucene as typed, so its syntax works; one Lucene rejects (a ``/``, an
+    unbalanced quote) is searched again with the special characters escaped.
+    """
     cfg = app.cfg
     scopes, _label = view_scopes(cfg, scope_flag)
-    with cli_errors():
-        hits = app.read(
+
+    def run(text: str) -> list[tuple[records.Record, float]]:
+        return app.read(
             lambda tx: records.search(
-                tx,
-                query_text,
-                scopes=scopes,
-                kind=kind,
-                include_archived=include_archived,
-                limit=limit,
+                tx, text, scopes=scopes, kind=kind, include_archived=include_archived, limit=limit
             )
         )
+
+    plain = False
+    with cli_errors():
+        try:
+            hits = run(query_text)
+        except Neo4jError as exc:
+            if not records.is_parse_error(exc):
+                raise
+            click.echo("kb search: not valid Lucene syntax, searched as plain text", err=True)
+            plain = True
+            hits = run(records.lucene_escape(query_text))
     app.emit(
-        {"hits": [{**r.to_json(), "score": s} for r, s in hits]},
+        {"hits": [{**r.to_json(), "score": s} for r, s in hits], "plain_text": plain},
         "\n".join(f"[{r.id}] {r.kind} {r.slug or '-'} {r.title}  {s:.2f}" for r, s in hits),
     )
 
@@ -1667,11 +1807,20 @@ def placeholder_title(slug: str | None, source: str | None) -> str:
 @click.option(
     "--source", type=click.Choice(HOOK_SOURCES), required=True, help="The SessionStart matcher."
 )
+@click.option(
+    "--title",
+    "title_hint",
+    help="The session's title in the app; stored as title_hint, the record's title is not set.",
+)
 @json_option
 @pass_app
-def session_open(app: App, *, scope_flag: str | None, session_id: str, source: str) -> None:
-    """Idempotent on the id: an open record is left alone, a closed one loses its closed_at."""
+def session_open(
+    app: App, *, scope_flag: str | None, session_id: str, source: str, title_hint: str | None
+) -> None:
+    """Idempotent on the id: an open record is left alone (but for a new title hint), a closed
+    one loses its closed_at."""
     cfg = app.cfg
+    hint = " ".join((title_hint or "").split())[: records.TITLE_MAX] or None
     scope = write_scope(cfg, scope_flag)
     scopes, _ = view_scopes(cfg, scope_flag)
     today = calendar.today(cfg)
@@ -1680,10 +1829,14 @@ def session_open(app: App, *, scope_flag: str | None, session_id: str, source: s
     def work(tx: ManagedTransaction) -> tuple[records.Record, str]:
         rec = records.session_by_id(tx, session_id, own_session_scopes(app, session_id, scopes))
         if rec is not None and rec.closed_at is None:
+            if hint is not None and hint != rec.title_hint:
+                rec = records.touch(tx, rec.id, at, title_hint=hint)
             return rec, "open"
         if rec is not None:
             records.add_event(tx, rec.id, "opened", at, note=source, session=session_id)
             changes: dict[str, Any] = {"closed_at": None, "reason": None, "source": source}
+            if hint is not None:
+                changes["title_hint"] = hint
             # the placeholder names the source, so a reopen from another matcher must rewrite
             # it; a title Claude has written is the session's own and survives
             if rec.title == placeholder_title(rec.slug, rec.source):
@@ -1700,7 +1853,12 @@ def session_open(app: App, *, scope_flag: str | None, session_id: str, source: s
             slug=slug,
             source=source,
             session=session_id,
-            extra={"session_id": session_id, "opened_at": at, "no_summary": False},
+            extra={
+                "session_id": session_id,
+                "opened_at": at,
+                "no_summary": False,
+                "title_hint": hint,
+            },
         )
         records.add_event(tx, rec.id, "opened", at, note=source, session=session_id)
         return rec, "created"
@@ -2001,6 +2159,220 @@ def index(app: App, scope_flag: str | None, budget: int | None, kinds: str) -> N
     if total and recents and len(lines) + 3 <= budget:
         lines += ["", "## Recent", *(index_line(r) for r in recents)]
     click.echo("\n".join(lines[:budget]))
+
+
+# --- tags / context / consolidate ------------------------------------------------------
+
+
+OTHER_TAGS_SHOWN = 20
+
+
+def vocabulary_scope(cfg: Config, flag: str | None) -> str:
+    """The scope whose vocabulary a command reads: --scope, else the cwd's; an error outside."""
+    scope = resolve_scope(cfg, flag)
+    if scope is None:
+        raise click.UsageError("outside every configured scope, pass --scope")
+    return scope
+
+
+def tag_line(name: str, count: int, description: str, builtin: bool) -> str:
+    return f"  {name:<22} {count:>4}  {description}{'  (built-in)' if builtin else ''}"
+
+
+@main.group(
+    "tags",
+    invoke_without_command=True,
+    help="The tags a scope may use, with use counts and the .kb/tags.toml in use.",
+)
+@click.option("--scope", "scope_flag", help="Default: the cwd scope.")
+@json_option
+@click.pass_context
+def tags_group(ctx: click.Context, scope_flag: str | None) -> None:
+    """Areas (the project file's, then the built-in ones), types, and tags outside both."""
+    if ctx.invoked_subcommand is not None:
+        return
+    app = ctx.find_object(App)
+    cfg = app.cfg
+    scope = vocabulary_scope(cfg, scope_flag)
+    scopes, _ = view_scopes(cfg, scope)
+    with cli_errors():
+        vocab = tags.load(cfg, scope)
+        counts = app.read(lambda tx: records.tag_counts(tx, scopes))
+    areas = [
+        {"name": n, "description": d, "origin": vocab.origin(n), "count": counts.get(n, 0)}
+        for n, d in vocab.areas.items()
+    ]
+    types = [
+        {"name": n, "description": d, "count": counts.get(n, 0)} for n, d in tags.TYPE_TAGS.items()
+    ]
+    other = sorted(
+        ({"name": n, "count": c} for n, c in counts.items() if n not in vocab.valid),
+        key=lambda t: (-t["count"], t["name"]),
+    )
+    if vocab.file is not None:
+        source = str(vocab.file)
+    elif vocab.path is not None:
+        source = f"no {vocab.path}, built-in areas only (kb tags init writes one)"
+    else:
+        source = "built-in areas"
+    lines = [f"kb tags {scope}: {source}", "areas:"]
+    lines += [
+        tag_line(a["name"], a["count"], a["description"], a["origin"] == "built-in") for a in areas
+    ]
+    lines += ["types:", *(tag_line(t["name"], t["count"], t["description"], False) for t in types)]
+    if other:
+        shown = ", ".join(f"{t['name']} {t['count']}" for t in other[:OTHER_TAGS_SHOWN])
+        if len(other) > OTHER_TAGS_SHOWN:
+            shown += f", … and {len(other) - OTHER_TAGS_SHOWN} more"
+        lines.append(f"not in the vocabulary (records keep them, add/edit refuse them): {shown}")
+    app.emit(
+        {
+            "scope": scope,
+            "file": str(vocab.file) if vocab.file else None,
+            "areas": areas,
+            "types": types,
+            "other": other,
+        },
+        "\n".join(lines),
+    )
+
+
+@tags_group.command(
+    "init", help="Write a seed .kb/tags.toml at the scope's repo root; never overwrites."
+)
+@click.option("--scope", "scope_flag", help="A [scopes] project; default: the cwd scope.")
+@json_option
+@pass_app
+def tags_init(app: App, scope_flag: str | None) -> None:
+    cfg = app.cfg
+    scope = vocabulary_scope(cfg, scope_flag)
+    path = tags.tags_file(cfg, scope)
+    if path is None:
+        raise click.UsageError(
+            f"scope {scope} has no repo root; .kb/tags.toml belongs to a [scopes] project"
+        )
+    if path.exists():
+        app.emit({"file": str(path), "written": False}, f"{path} exists, not overwritten")
+        return
+    with cli_errors():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tags.SEED)
+    app.emit({"file": str(path), "written": True}, f"wrote {path}")
+
+
+def shared_areas(rec: records.Record, areas: list[str]) -> list[str]:
+    return [t for t in rec.tags if t in areas]
+
+
+@main.command(
+    help="What to read before working on a record: its area tags, the knowledge records "
+    "sharing an area, and the other open tasks there. Exit 4 on a record with no area tag."
+)
+@click.argument("ref")
+@scope_option
+@json_option
+@pass_app
+def context(app: App, ref: str, scope_flag: str | None) -> None:
+    """``[id] kind title — summary`` per knowledge record, most shared areas first; bodies are
+    read on demand with kb show."""
+    cfg = app.cfg
+    scopes, _ = view_scopes(cfg, scope_flag)
+
+    def work(
+        tx: ManagedTransaction,
+    ) -> tuple[records.Record, list[str], list[records.Record], list[records.Record]]:
+        rec = records.resolve(tx, ref, scopes)
+        vocab = tags.load(cfg, rec.scope)
+        areas = vocab.area_tags(rec.tags)
+        if not areas:
+            raise tags.TagError(
+                f"[{rec.id}] has no area tag; tag it first: kb edit {rec.id} --tag AREA; "
+                f"{vocab.listing()}"
+            )
+        knowledge = records.tagged(tx, scopes, records.KNOWLEDGE_KINDS, areas)
+        tasks = records.tagged(tx, scopes, ("task",), areas, open_only=True)
+        return rec, areas, knowledge, [t for t in tasks if t.id != rec.id]
+
+    with cli_errors():
+        rec, areas, knowledge, tasks = app.read(work)
+    knowledge = sorted(
+        (k for k in knowledge if k.id != rec.id),
+        key=lambda k: (
+            -len(shared_areas(k, areas)),
+            not k.pinned,
+            -(k.updated_at.timestamp() if k.updated_at else 0),
+            k.id,
+        ),
+    )
+    tasks.sort(key=lambda t: (-len(shared_areas(t, areas)), t.id))
+
+    def knowledge_line(k: records.Record) -> str:
+        return f"  [{k.id}] {k.kind} {k.title}" + (f" — {k.summary}" if k.summary else "")
+
+    lines = [record_line(rec), f"areas: {', '.join(areas)}", f"knowledge ({len(knowledge)}):"]
+    lines += [knowledge_line(k) for k in knowledge]
+    lines += [f"open tasks ({len(tasks)}):", *(f"  [{t.id}] {t.title}" for t in tasks)]
+    app.emit(
+        {
+            "id": rec.id,
+            "kind": rec.kind,
+            "scope": rec.scope,
+            "title": rec.title,
+            "areas": areas,
+            "knowledge": [
+                {
+                    "id": k.id,
+                    "kind": k.kind,
+                    "scope": k.scope,
+                    "slug": k.slug,
+                    "title": k.title,
+                    "summary": k.summary,
+                    "areas": shared_areas(k, areas),
+                }
+                for k in knowledge
+            ],
+            "tasks": [
+                {"id": t.id, "scope": t.scope, "title": t.title, "areas": shared_areas(t, areas)}
+                for t in tasks
+            ],
+        },
+        "\n".join(lines),
+    )
+
+
+@main.command(
+    "consolidate",
+    help="Propose merges, condensing and archiving of notes, references, feedback and howtos "
+    "(a decision only for archive once superseded); writes nothing.",
+)
+@scope_option
+@json_option
+@pass_app
+def consolidate_cmd(app: App, scope_flag: str | None) -> None:
+    """Grouped by action, each with its reason and the commands that would apply it."""
+    cfg = app.cfg
+    scopes, label = view_scopes(cfg, scope_flag)
+    today = calendar.today(cfg)
+    with cli_errors():
+        proposals = app.read(lambda tx: consolidate.propose(tx, cfg, scopes, today))
+    counts = {
+        a: sum(1 for p in proposals if p.action == a) for a in ("merge", "condense", "archive")
+    }
+    lines = [
+        f"kb consolidate ({label}): "
+        + ", ".join(f"{n} {a}" for a, n in counts.items())
+        + " — proposals only, nothing written"
+    ]
+    for action in counts:
+        group = [p for p in proposals if p.action == action]
+        if not group:
+            continue
+        lines.append(f"{action}:")
+        for prop in group:
+            lines.append("  " + "  +  ".join(f"[{r.id}] {r.kind} {r.title}" for r in prop.records))
+            lines.append(f"    {prop.reason}")
+            lines += [f"    {c}" for c in prop.commands]
+    app.emit({"scope": label, "proposals": [p.to_json() for p in proposals]}, "\n".join(lines))
 
 
 # --- migrate ----------------------------------------------------------------------------
