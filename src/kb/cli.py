@@ -791,7 +791,7 @@ def refuse_similar(app: App, found: list[similar.Similar]) -> None:
 @click.option("--due", metavar="DATE", help="Hard deadline (screams on and after the date).")
 @click.option("--plan", metavar="DATE", help="Soft date (asks to rebalance or close after it).")
 @click.option("--window", metavar="W", help="weekend | sat,sun | RRULE (FREQ=...).")
-@click.option("--once", is_flag=True, help="Tell me once: done after the first standup shows it.")
+@click.option("--once", is_flag=True, help="A notice: done once kb notices show prints it.")
 @click.option("--repeat", metavar="R", help="calendar:<rrule> | interval:<N>d, with --due/--plan.")
 @click.option("--anchor", metavar="DATE", help="Age anchor (default today).")
 @click.option("--days", type=click.Choice(records.DAYS), help="Default: work/off/any by scope.")
@@ -1462,6 +1462,21 @@ def no_summary_line(pending: list[records.Record]) -> str:
     )
 
 
+def mark_shown(
+    tx: ManagedTransaction,
+    task: records.Record,
+    *,
+    today: dt.date,
+    cfg: Config,
+    at: dt.datetime,
+    session: str | None,
+) -> None:
+    """A ``shown`` event; a ``once`` task is done once shown."""
+    records.add_event(tx, task.id, "shown", at, session=session)
+    if task.sched == "once":
+        records.mark_done(tx, task, comment="shown", today=today, cfg=cfg, at=at, session=session)
+
+
 def standup(
     app: App,
     scope_flag: str | None,
@@ -1488,17 +1503,7 @@ def standup(
             if record_shown:
                 for row in rows:
                     if row.level >= urgency.NORMAL:
-                        records.add_event(tx, row.task.id, "shown", at, session=app.session)
-                        if row.task.sched == "once":
-                            records.mark_done(
-                                tx,
-                                row.task,
-                                comment="shown",
-                                today=today,
-                                cfg=cfg,
-                                at=at,
-                                session=app.session,
-                            )
+                        mark_shown(tx, row.task, today=today, cfg=cfg, at=at, session=app.session)
             pending = (
                 records.sessions_without_summary(
                     tx, scopes, at - dt.timedelta(days=NO_SUMMARY_DAYS)
@@ -1585,6 +1590,102 @@ def today(app: App, scope_flag: str | None, record_shown: bool) -> None:
 @pass_app
 def next_(app: App, scope_flag: str | None) -> None:
     standup(app, scope_flag, min_level=urgency.WHISPER, record_shown=False, name="next")
+
+
+# --- notices ----------------------------------------------------------------------------
+
+
+def due_notices(
+    tx: ManagedTransaction,
+    scopes: list[str] | None,
+    *,
+    today: dt.date,
+    cfg: Config,
+    at: dt.datetime,
+    session: str | None,
+) -> list[records.Assessment]:
+    """The ``--once`` tasks a standup would print: not shown yet, not snoozed."""
+    once = [t for t in records.open_tasks(tx, scopes) if t.sched == "once"]
+    rows = records.assess(tx, once, today=today, cfg=cfg, at=at, session=session)
+    return [r for r in rows if r.level >= urgency.NORMAL]
+
+
+def notices_line(count: int) -> str:
+    if not count:
+        return "no notices"
+    noun = "1 notice waits" if count == 1 else f"{count} notices wait"
+    return f"{noun}: kb notices show prints them and closes them"
+
+
+@main.group(
+    "notices",
+    invoke_without_command=True,
+    help="How many --once notices wait, never their text; exit 0 always. show prints them.",
+)
+@scope_option
+@json_option
+@click.pass_context
+def notices_group(ctx: click.Context, scope_flag: str | None) -> None:
+    """The count a session hook prints, so the assistant asks before the notices are read."""
+    if ctx.invoked_subcommand is not None:
+        return
+    app = ctx.find_object(App)
+    try:
+        cfg = app.cfg
+        scopes, label = view_scopes(cfg, scope_flag)
+        today = calendar.today(cfg)
+        at = calendar.now(cfg)
+        rows = app.read(
+            lambda tx: due_notices(tx, scopes, today=today, cfg=cfg, at=at, session=app.session)
+        )
+    except (click.ClickException, Neo4jError, DriverError, OSError, ValueError) as exc:
+        message = exc.message if isinstance(exc, click.ClickException) else str(exc)
+        if app.as_json:
+            click.echo(json.dumps({"error": message, "count": 0, "ids": []}))
+        else:
+            click.echo(f"kb notices: {message}", err=True)
+        return
+    app.emit(
+        {"scope": label, "count": len(rows), "ids": [r.task.id for r in rows]},
+        notices_line(len(rows)),
+    )
+
+
+@notices_group.command("show", help="Print the waiting --once notices and close them (shown).")
+@scope_option
+@json_option
+@pass_app
+def notices_show(app: App, scope_flag: str | None) -> None:
+    cfg = app.cfg
+    scopes, label = view_scopes(cfg, scope_flag)
+    today = calendar.today(cfg)
+    at = calendar.now(cfg)
+
+    def work(tx: ManagedTransaction) -> list[records.Assessment]:
+        rows = due_notices(tx, scopes, today=today, cfg=cfg, at=at, session=app.session)
+        for row in rows:
+            mark_shown(tx, row.task, today=today, cfg=cfg, at=at, session=app.session)
+        return rows
+
+    with cli_errors():
+        rows = app.write(work)
+    lines = [f"kb notices {today} ({label})"]
+    for row in rows:
+        lines.append(f"[{row.task.id}] {row.task.title}")
+        lines += [f"  {line}" if line else "" for line in row.task.body.splitlines()]
+    if not rows:
+        lines.append("no notices")
+    app.emit(
+        {
+            "date": today.isoformat(),
+            "scope": label,
+            "notices": [
+                {"id": r.task.id, "scope": r.task.scope, "title": r.task.title, "body": r.task.body}
+                for r in rows
+            ],
+        },
+        "\n".join(lines),
+    )
 
 
 @main.command(help="Spell out how a task's level is computed today.")

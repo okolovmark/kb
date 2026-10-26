@@ -130,7 +130,7 @@ A Task carries its schedule as properties: `sched` plus
 | `soft` | `--plan DATE` | `due` | as hard until the date, then normal with `decide: rebalance or done (T+n)` |
 | `age` | no flag | `anchor` (default today) | working days since the anchor: whisper 5, normal 10, loud 15, never screams |
 | `window` | `--window weekend\|sat,sun\|RRULE` | `window_rrule`, `anchor` (rrule start), `skips`, `backlog` | normal inside a window, silent outside; an untouched window counts as skipped when the next standup runs (`today`, `next` and `show` write the `skip`); backlog after 2 skips; nothing is counted while snoozed |
-| `once` | `--once` | | normal until a standup with `--record-shown` prints it, then done; not lowered by the day fit; snooze respected |
+| `once` | `--once` | | a notice: normal until `kb notices show` or a standup with `--record-shown` prints it, then done; not lowered by the day fit; snooze respected |
 
 Shared: `days` (`work` / `off` / `any`, default by scope: project work, personal off, global any;
 a mismatch with today lowers the level by one except at scream), `repeat`
@@ -157,6 +157,13 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
   tasks. Exit 0 always.
 - `kb next [--scope S]` — like today, down to whisper; writes no `shown` events, though the lazy
   window `skip`s still happen.
+- `kb notices [--scope S]` — how many notices (`once` tasks at normal) wait, never their text:
+  `N notices wait: kb notices show prints them and closes them`, or `no notices`; `{scope, count,
+  ids}` under `--json`. Writes nothing; exit 0 always. A session hook prints the count, and the
+  assistant asks the user before it reads them.
+- `kb notices show [--scope S]` — prints `kb notices <date> (<scope>)` and each waiting notice as
+  `[id] title` with its body indented, and closes each one as `--record-shown` does: a `shown`
+  event, then done with the note `shown`.
 - `kb why REF` — the level computation spelled out: schedule, thresholds and their source, calendar,
   snooze, day fit, result.
 

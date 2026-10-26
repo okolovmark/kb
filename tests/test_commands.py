@@ -873,6 +873,61 @@ def test_once_is_shown_on_a_weekend_and_can_be_snoozed(monkeypatch) -> None:
 
 
 @pytest.mark.usefixtures("kb_env")
+def test_notices_count_then_show_prints_and_closes(monkeypatch) -> None:
+    once = add("Tell me once", "--once", "--body", "first line\n\nafter a blank")
+    snoozed = str(add("Later", "--once"))
+    kb("snooze", snoozed, "2026-09-16")
+    glob = kb_json("add", "Global notice", "--once", "--scope", "global")["id"]
+    plain = add("An ageing thread")
+    loud = add("Soon", "--due", "2026-09-16")
+
+    count = kb("notices", "--scope", "proj")
+    assert count.output == "2 notices wait: kb notices show prints them and closes them\n"
+    assert kb_json("notices", "--scope", "proj") == {
+        "scope": "proj",
+        "count": 2,
+        "ids": [once, glob],
+    }
+    assert events(str(once)) == ["created"]  # counting writes nothing
+
+    monkeypatch.setenv("KB_SESSION", "sess-1")
+    shown = kb("notices", "show", "--scope", "proj").output.splitlines()
+    assert shown == [
+        f"kb notices {MONDAY} (proj)",
+        f"[{once}] Tell me once",
+        "  first line",
+        "",
+        "  after a blank",
+        f"[{glob}] Global notice",
+    ]
+    assert events(str(once)) == ["done", "shown", "created"]
+    rec = kb_json("show", str(once))
+    assert rec["done_at"] is not None and rec["events"][0]["session"] == "sess-1"
+    assert events(snoozed) == ["snooze", "created"]
+    assert events(str(plain)) == ["created"] and events(str(loud)) == ["created"]
+
+    assert kb("notices", "--scope", "proj").output == "no notices\n"
+    assert kb("notices", "show", "--scope", "proj").output.splitlines()[1:] == ["no notices"]
+    assert kb_json("notices", "show", "--scope", "proj")["notices"] == []
+    monkeypatch.setenv("KB_TODAY", "2026-09-16")
+    assert kb("notices", "--scope", "proj").output.startswith("1 notice waits:")
+    assert kb_json("notices", "show", "--scope", "proj")["notices"] == [
+        {"id": int(snoozed), "scope": "proj", "title": "Later", "body": ""}
+    ]
+
+
+@pytest.mark.usefixtures("kb_env")
+def test_notices_count_never_fails(tmp_path, monkeypatch) -> None:
+    broken = tmp_path / "broken.toml"
+    broken.write_text("[neo4j]\nbolt_port = 1\n")
+    monkeypatch.setenv("KB_CONFIG", str(broken))
+    result = kb("notices")
+    assert result.stdout == "" and result.stderr.startswith("kb notices: ")
+    assert json.loads(kb("--json", "notices").stdout)["count"] == 0
+    kb("notices", "show", code=1)
+
+
+@pytest.mark.usefixtures("kb_env")
 def test_index_budget_covers_pinned_lines_too() -> None:
     for n in range(3):
         kb_json("add", f"Rule {n}", "--kind", "feedback", "--scope", "global")

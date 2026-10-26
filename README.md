@@ -69,6 +69,7 @@ kb add "review the distributor PR"                            # no schedule: age
 
 kb today                     # the standup: everything at normal or above
 kb next                      # the same, down to a whisper
+kb notices show              # the one-off notices (--once): printed once, then closed
 kb why 144                   # why this one is loud today
 kb done 283 "shipped in the September release"
 kb snooze 144 2026-09-19
