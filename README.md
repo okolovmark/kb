@@ -90,6 +90,12 @@ kb show reference_payment_terms       # by slug or by id
 kb links reference_payment_terms      # what it relates to, blocks or supersedes
 ```
 
+A rule an assistant must follow every session is a pinned record: feedback is pinned when it is
+created, `kb pin` pins anything else. Pins have two levels. The few rules that must never be
+missed are critical (`kb add ... --critical`, or `kb pin <id> --critical`): `kb index` prints them
+first, marked `CRITICAL`, so a session start short on room drops the normal ones before them.
+`kb pin <id> --normal` demotes one, `kb unpin <id>` takes it off the list.
+
 Every command explains itself with `--help`, and `kb --help` lists them all. Worth knowing beyond the
 above: `append` and `edit` grow a record, `archive`, `supersede` and `merge` retire one without
 deleting anything, `skip` closes a missed window, `promote` ties a thread to a ticket, `index` prints

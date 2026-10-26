@@ -186,6 +186,8 @@ def test_add_schedule_flags() -> None:
         (["--link", "related:999999"], "no record 999999"),
         (["--pin"], "--pin/--no-pin apply to non-task kinds"),
         (["--no-pin"], "--pin/--no-pin apply to non-task kinds"),
+        (["--critical"], "--critical applies to non-task kinds"),
+        (["--kind", "note", "--critical", "--no-pin"], "--critical and --no-pin are exclusive"),
         (["--window", "DTSTART:20260101\nRRULE:FREQ=WEEKLY;BYDAY=SA"], "a single RRULE body"),
         (["--due", "2026-09-15", "--repeat", "calendar:DTSTART:20260101"], "a single RRULE body"),
     ],
@@ -755,6 +757,8 @@ def test_help_of_every_new_command() -> None:
         "link",
         "unlink",
         "promote",
+        "pin",
+        "unpin",
         "sync",
         "index",
         "migrate",
@@ -1077,6 +1081,8 @@ def test_view_scope_hides_records_of_other_scopes(kb_env, monkeypatch) -> None:
         ["merge", pid, gid],
         ["supersede", pid, gid],
         ["promote", pid, "KIO-1"],
+        ["pin", pid, "--critical"],
+        ["unpin", pid],
     ):
         result = kb(*args, code=1)
         assert result.output.strip() == refused, args

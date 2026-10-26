@@ -780,6 +780,7 @@ def refuse_similar(app: App, found: list[similar.Similar]) -> None:
 @click.option("--summary", help="One line shown by index and show.")
 @click.option("--slug", help="Non-task kinds only; derived from the title when omitted.")
 @click.option("--pin/--no-pin", "pin", default=None, help="Default: pinned for feedback only.")
+@click.option("--critical", is_flag=True, help="Pinned at level critical (implies --pin).")
 @click.option(
     "--tag",
     "tag_names",
@@ -818,6 +819,7 @@ def add(
     summary: str | None,
     slug: str | None,
     pin: bool | None,
+    critical: bool,
     tag_names: tuple[str, ...],
     links: tuple[str, ...],
     due: str | None,
@@ -860,6 +862,10 @@ def add(
             raise click.UsageError("--slug applies to non-task kinds")
         if pin is not None and kind == "task":
             raise click.UsageError("--pin/--no-pin apply to non-task kinds")
+        if critical and kind == "task":
+            raise click.UsageError("--critical applies to non-task kinds")
+        if critical and pin is False:
+            raise click.UsageError("--critical and --no-pin are exclusive")
         vocab = tags.load(cfg, scope)
         unique_tags = vocab.check(list(tag_names))
         tags.require_area(vocab, kind, unique_tags, "kb add")
@@ -887,6 +893,7 @@ def add(
                 summary=clean_summary,
                 slug=slug,
                 pinned=pin,
+                pin_level="critical" if critical else None,
                 tags=unique_tags,
                 source=source,
                 external_id=external_id,
@@ -1120,7 +1127,7 @@ def show(app: App, ref: str, scope_flag: str | None) -> None:
         f"[{rec.id}] {rec.title}",
         *([rec.summary] if rec.summary else []),
         f"kind: {rec.kind}  scope: {rec.scope}  slug: {rec.slug or '-'}  "
-        f"tags: {', '.join(rec.tags) or '-'}  pinned: {'yes' if rec.pinned else 'no'}  "
+        f"tags: {', '.join(rec.tags) or '-'}  pinned: {rec.pin_level or 'no'}  "
         f"source: {rec.source}"
         + (f"  external: {rec.external_id}" if rec.external_id else "")
         + (f"  stage: {rec.stage}" if rec.stage else ""),
@@ -1916,6 +1923,80 @@ def promote(app: App, ref: str, key: str, scope_flag: str | None) -> None:
     emit_record(app, rec, f"  · odoo {key}")
 
 
+def pin_state(rec: records.Record) -> dict[str, Any]:
+    return {"pinned": rec.pinned, "pin_level": rec.pin_level}
+
+
+def set_pin(
+    app: App, ref: str, scope_flag: str | None, level: str | None
+) -> tuple[records.Record, dict[str, Any], bool]:
+    """Pin at *level*, or unpin with None: ``(record, state before, written)``. An unchanged
+    state writes nothing; a change writes an ``edited`` event with the changed fields' before
+    and after values."""
+    scopes, _ = view_scopes(app.cfg, scope_flag)
+    at = calendar.now(app.cfg)
+
+    def work(tx: ManagedTransaction) -> tuple[records.Record, dict[str, Any], bool]:
+        rec = records.resolve(tx, ref, scopes)
+        if level is not None and rec.kind == "task":
+            raise records.RecordError(f"[{rec.id}] is a task; pin is for non-task kinds")
+        before = pin_state(rec)
+        after = {"pinned": level is not None, "pin_level": level}
+        changed = sorted(k for k in after if after[k] != before[k])
+        if not changed:
+            return rec, before, False
+        current = app.current_session(tx, scopes, at)
+        records.add_event(
+            tx,
+            rec.id,
+            "edited",
+            at,
+            payload={
+                "fields": changed,
+                "before": {k: before[k] for k in changed},
+                "after": {k: after[k] for k in changed},
+            },
+            session=app.stamp_of(current),
+        )
+        touch_session(tx, current, at, rec.id)
+        return records.touch(tx, rec.id, at, **after), before, True
+
+    with cli_errors():
+        return app.write(work)
+
+
+@main.command(
+    help="Pin a record: kb index prints it under Pinned, critical ones first. Normal unless "
+    "--critical; --normal demotes a critical one."
+)
+@click.argument("ref")
+@click.option("--critical/--normal", "critical", default=False, help="The level; default normal.")
+@scope_option
+@json_option
+@pass_app
+def pin(app: App, ref: str, critical: bool, scope_flag: str | None) -> None:
+    level = "critical" if critical else "normal"
+    rec, before, written = set_pin(app, ref, scope_flag, level)
+    if not written:
+        extra = f"  already pinned {level}"
+    elif before["pinned"]:
+        extra = f"  · pinned {level} (was {before['pin_level']})"
+    else:
+        extra = f"  · pinned {level}"
+    emit_record(app, rec, extra, written=written, before=before)
+
+
+@main.command(help="Unpin a record: it leaves Pinned and loses its level.")
+@click.argument("ref")
+@scope_option
+@json_option
+@pass_app
+def unpin(app: App, ref: str, scope_flag: str | None) -> None:
+    rec, before, written = set_pin(app, ref, scope_flag, None)
+    extra = f"  · unpinned (was {before['pin_level']})" if written else "  already unpinned"
+    emit_record(app, rec, extra, written=written, before=before)
+
+
 # --- session ----------------------------------------------------------------------------
 
 
@@ -2287,30 +2368,59 @@ def parse_kinds(text: str) -> list[str]:
 
 
 def index_line(rec: records.Record) -> str:
-    """``- [id] slug — summary`` (cut at 160 characters with ``…``), the title without one."""
+    """``- [id] slug — summary`` (cut at 160 characters with ``…``), the title without one; a
+    critical record reads ``- [id] CRITICAL slug — summary``. Every line starts ``- [``, which
+    is how a session hook finds the Pinned rules."""
     text = rec.summary or rec.title
     if len(text) > INDEX_SUMMARY_MAX:
         text = text[:INDEX_SUMMARY_MAX].rstrip() + "…"
-    return f"- [{rec.id}] {rec.slug or '-'} — {text}"
+    marker = "CRITICAL " if rec.pin_level == "critical" else ""
+    return f"- [{rec.id}] {marker}{rec.slug or '-'} — {text}"
 
 
-@main.command(help="The memory index a session hook prints: pinned records, then recent ones.")
+def index_entry(rec: records.Record) -> dict[str, Any]:
+    return {
+        "id": rec.id,
+        "kind": rec.kind,
+        "scope": rec.scope,
+        "slug": rec.slug,
+        "title": rec.title,
+        "summary": rec.summary,
+        "pin_level": rec.pin_level,
+    }
+
+
+@main.command(
+    help="The memory index a session hook prints: pinned records (critical first), then recent "
+    "ones."
+)
 @click.option("--scope", "scope_flag")
 @click.option(
     "--budget", type=click.IntRange(min=1), help="Max lines; default [index].budget_lines."
 )
 @click.option("--kinds", default=INDEX_KINDS, show_default=True, help="Comma-separated kinds.")
+@json_option
 @pass_app
 def index(app: App, scope_flag: str | None, budget: int | None, kinds: str) -> None:
-    """Header, ``## Pinned``, ``## Recent``, at most *budget* lines in total; exit 0 always."""
+    """Header, ``## Pinned``, ``## Recent``, at most *budget* lines in total; exit 0 always.
+    ``--json`` carries the records those lines print."""
     kind_list = parse_kinds(kinds)
+
+    def failed(message: str, header: str | None = None) -> None:
+        if app.as_json:
+            click.echo(json.dumps({"error": message, "pinned": [], "recent": []}))
+            return
+        if header:
+            click.echo(header)
+        click.echo(f"kb index: {message}", err=True)
+
     try:
         cfg = app.cfg
         budget = budget or cfg.index.budget_lines
         scopes, label = view_scopes(cfg, scope_flag)
         today = calendar.today(cfg)
     except click.ClickException as exc:
-        click.echo(f"kb index: {exc.message}", err=True)
+        failed(exc.message)
         return
     header = (
         f"# kb index {today} ({label}) — generated, do not edit; write with kb add/append, "
@@ -2327,16 +2437,28 @@ def index(app: App, scope_flag: str | None, budget: int | None, kinds: str) -> N
     try:
         total, pins, recents = app.read(work)
     except (click.ClickException, Neo4jError, DriverError, OSError, ValueError) as exc:
-        message = exc.message if isinstance(exc, click.ClickException) else str(exc)
-        click.echo(header)
-        click.echo(f"kb index: {message}", err=True)
+        failed(exc.message if isinstance(exc, click.ClickException) else str(exc), header)
         return
-    lines = [header]
+    # (line, section, record) so the budget cuts the JSON exactly where it cuts the text
+    rows: list[tuple[str, str, records.Record | None]] = [(header, "", None)]
     if total and pins:
-        lines += ["", "## Pinned", *(index_line(r) for r in pins)]
-    if total and recents and len(lines) + 3 <= budget:
-        lines += ["", "## Recent", *(index_line(r) for r in recents)]
-    click.echo("\n".join(lines[:budget]))
+        rows += [("", "", None), ("## Pinned", "", None)]
+        rows += [(index_line(r), "pinned", r) for r in pins]
+    if total and recents and len(rows) + 3 <= budget:
+        rows += [("", "", None), ("## Recent", "", None)]
+        rows += [(index_line(r), "recent", r) for r in recents]
+    rows = rows[:budget]
+    app.emit(
+        {
+            "date": today.isoformat(),
+            "scope": label,
+            **{
+                section: [index_entry(r) for _, sec, r in rows if r is not None and sec == section]
+                for section in ("pinned", "recent")
+            },
+        },
+        "\n".join(line for line, _, _ in rows),
+    )
 
 
 # --- tags / context / consolidate ------------------------------------------------------
@@ -2477,7 +2599,7 @@ def context(app: App, ref: str, scope_flag: str | None) -> None:
         (k for k in knowledge if k.id != rec.id),
         key=lambda k: (
             -len(shared_areas(k, areas)),
-            not k.pinned,
+            records.pin_rank(k),
             -(k.updated_at.timestamp() if k.updated_at else 0),
             k.id,
         ),
