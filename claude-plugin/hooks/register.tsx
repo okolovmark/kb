@@ -269,7 +269,7 @@ export const register: Register = on => {
     const counts = data === null ? null : countByLevel(data.tasks)
 
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" rowGap="sm">
         {below}
         {counts !== null && (
           <Box key="kb-today-row" flexDirection="row" columnGap={1} alignItems="center">
