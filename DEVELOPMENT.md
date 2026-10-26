@@ -4,7 +4,7 @@ Building, testing and changing kb, and where the code lives. Back to the [README
 
 ```sh
 nix develop                           # Python 3.14 venv: kb editable from src/, pytest, ruff, uv; neo4j on PATH; KB_NEO4J_PACKAGE set
-pytest                                # 314 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
+pytest                                # 317 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
 ruff check . && ruff format --check .
 uv lock                               # after editing dependencies; uv.lock is what the flake builds (UV_NO_SYNC=1 in the shell)
 ```
@@ -38,6 +38,6 @@ tests/             pytest; conftest starts the throwaway Neo4j; fixtures/state_s
                    fixtures/nodes/ (five memory nodes and one file without frontmatter),
                    fixtures/journal/ (three day files and one of edge cases)
 docs/              install.md, configuration.md, model.md, migration.md, adr/ (decision records)
-claude-plugin/     the Claude Code plugin: hooks/ (standup pane, session journal),
+claude-plugin/     the Claude Code plugin: hooks/ (standup pane with notices, session journal),
                    skills/kb-consolidate (review and apply kb consolidate with the user)
 ```

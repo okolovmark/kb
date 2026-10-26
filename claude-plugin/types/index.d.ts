@@ -18,6 +18,14 @@ export type KbToday = {
   noSummary: number
 }
 
+// One notice of `kb --json notices show`: a --once task for the user, never on the standup
+export type KbNotice = {
+  id: number
+  scope: string
+  title: string
+  body: string
+}
+
 // `kb --json show <ref>`, as much of it as the node pane draws
 export type KbNode = {
   id: number
@@ -54,7 +62,9 @@ declare module 'claude-code' {
   interface PluginState {
     kb: {
       today: KbToday | null
-      // the task whose `done` waits for a yes, and the task whose command runs
+      // the notices waiting for a dismiss, drawn above the standup; null until kb answered
+      notices: KbNotice[] | null
+      // the task whose `done` waits for a yes, and the task (or notice) whose command runs
       armed: number | null
       busy: number | null
       // the record the node pane shows; whether the pane lists the whisper tasks

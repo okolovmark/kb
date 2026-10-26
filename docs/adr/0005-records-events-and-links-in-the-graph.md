@@ -41,7 +41,7 @@ needs the schedule and the events of a task in one read.
   `recurrence exhausted`. A second `done` on the same day is a no-op.
 - Day fit: when a task's `days` (work / off / any) does not match today, its level drops by
   one, except at scream (4) and silent (0). The reason gets ` (off-day)` or ` (workday)`.
-  `once` tasks are exempt (a notification fires on the next session whatever the day) and
+  `once` tasks are exempt (a notice waits in the kb pane whatever the day) and
   respect snooze.
 - The Odoo sync owns a task's schedule and `stage`; the person owns title and body. The body
   is written once at creation; the title follows Odoo only on records the sync created itself

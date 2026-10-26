@@ -792,7 +792,12 @@ def refuse_similar(app: App, found: list[similar.Similar]) -> None:
 @click.option("--due", metavar="DATE", help="Hard deadline (screams on and after the date).")
 @click.option("--plan", metavar="DATE", help="Soft date (asks to rebalance or close after it).")
 @click.option("--window", metavar="W", help="weekend | sat,sun | RRULE (FREQ=...).")
-@click.option("--once", is_flag=True, help="A notice: done once kb notices show prints it.")
+@click.option(
+    "--once",
+    is_flag=True,
+    help="A notice for the user, off the standup: kb notices show prints it, "
+    "kb notices dismiss closes it.",
+)
 @click.option("--repeat", metavar="R", help="calendar:<rrule> | interval:<N>d, with --due/--plan.")
 @click.option("--anchor", metavar="DATE", help="Age anchor (default today).")
 @click.option("--days", type=click.Choice(records.DAYS), help="Default: work/off/any by scope.")
@@ -1469,21 +1474,6 @@ def no_summary_line(pending: list[records.Record]) -> str:
     )
 
 
-def mark_shown(
-    tx: ManagedTransaction,
-    task: records.Record,
-    *,
-    today: dt.date,
-    cfg: Config,
-    at: dt.datetime,
-    session: str | None,
-) -> None:
-    """A ``shown`` event; a ``once`` task is done once shown."""
-    records.add_event(tx, task.id, "shown", at, session=session)
-    if task.sched == "once":
-        records.mark_done(tx, task, comment="shown", today=today, cfg=cfg, at=at, session=session)
-
-
 def standup(
     app: App,
     scope_flag: str | None,
@@ -1493,7 +1483,11 @@ def standup(
     name: str,
     sessions_line: bool = False,
 ) -> None:
-    """Shared body of ``today`` and ``next``; never exits non-zero (the hook depends on it)."""
+    """Shared body of ``today`` and ``next``; never exits non-zero (the hook depends on it).
+
+    ``--once`` notices are left out of the list, the counts and ``--record-shown``: they show
+    only through ``kb notices``, which the user reads and dismisses in the kb pane.
+    """
     try:
         cfg = app.cfg
         scopes, label = view_scopes(cfg, scope_flag)
@@ -1504,13 +1498,12 @@ def standup(
             tx: ManagedTransaction,
         ) -> tuple[dict[str, Any] | None, list[records.Assessment], list[records.Record]]:
             meta = records.get_meta(tx, sync_odoo.META_NAME)
-            rows = records.assess(
-                tx, records.open_tasks(tx, scopes), today=today, cfg=cfg, at=at, session=app.session
-            )
+            tasks = [t for t in records.open_tasks(tx, scopes) if t.sched != "once"]
+            rows = records.assess(tx, tasks, today=today, cfg=cfg, at=at, session=app.session)
             if record_shown:
                 for row in rows:
                     if row.level >= urgency.NORMAL:
-                        mark_shown(tx, row.task, today=today, cfg=cfg, at=at, session=app.session)
+                        records.add_event(tx, row.task.id, "shown", at, session=app.session)
             pending = (
                 records.sessions_without_summary(
                     tx, scopes, at - dt.timedelta(days=NO_SUMMARY_DAYS)
@@ -1611,7 +1604,7 @@ def due_notices(
     at: dt.datetime,
     session: str | None,
 ) -> list[records.Assessment]:
-    """The ``--once`` tasks a standup would print: not shown yet, not snoozed."""
+    """The open ``--once`` tasks that wait; a snoozed one waits from its date on."""
     once = [t for t in records.open_tasks(tx, scopes) if t.sched == "once"]
     rows = records.assess(tx, once, today=today, cfg=cfg, at=at, session=session)
     return [r for r in rows if r.level >= urgency.NORMAL]
@@ -1621,19 +1614,21 @@ def notices_line(count: int) -> str:
     if not count:
         return "no notices"
     noun = "1 notice waits" if count == 1 else f"{count} notices wait"
-    return f"{noun}: kb notices show prints them and closes them"
+    return f"{noun}: kb notices show prints them, kb notices dismiss <id> closes one"
 
 
 @main.group(
     "notices",
     invoke_without_command=True,
-    help="How many --once notices wait, never their text; exit 0 always. show prints them.",
+    help="How many --once notices wait, never their text; exit 0 always. show prints them, "
+    "dismiss closes one.",
 )
 @scope_option
 @json_option
 @click.pass_context
 def notices_group(ctx: click.Context, scope_flag: str | None) -> None:
-    """The count a session hook prints; the user runs ``show`` in their own terminal."""
+    """The count the kb band shows; the kb pane lists them with ``show`` and closes one with
+    ``dismiss``."""
     if ctx.invoked_subcommand is not None:
         return
     app = ctx.find_object(App)
@@ -1658,7 +1653,7 @@ def notices_group(ctx: click.Context, scope_flag: str | None) -> None:
     )
 
 
-@notices_group.command("show", help="Print the waiting --once notices and close them (shown).")
+@notices_group.command("show", help="Print the waiting --once notices; writes nothing.")
 @scope_option
 @json_option
 @pass_app
@@ -1667,15 +1662,10 @@ def notices_show(app: App, scope_flag: str | None) -> None:
     scopes, label = view_scopes(cfg, scope_flag)
     today = calendar.today(cfg)
     at = calendar.now(cfg)
-
-    def work(tx: ManagedTransaction) -> list[records.Assessment]:
-        rows = due_notices(tx, scopes, today=today, cfg=cfg, at=at, session=app.session)
-        for row in rows:
-            mark_shown(tx, row.task, today=today, cfg=cfg, at=at, session=app.session)
-        return rows
-
     with cli_errors():
-        rows = app.write(work)
+        rows = app.read(
+            lambda tx: due_notices(tx, scopes, today=today, cfg=cfg, at=at, session=app.session)
+        )
     lines = [f"kb notices {today} ({label})"]
     for row in rows:
         lines.append(f"[{row.task.id}] {row.task.title}")
@@ -1693,6 +1683,41 @@ def notices_show(app: App, scope_flag: str | None) -> None:
         },
         "\n".join(lines),
     )
+
+
+@notices_group.command(
+    "dismiss", help="Close one open --once notice: a done event noted dismissed."
+)
+@click.argument("ref")
+@scope_option
+@json_option
+@pass_app
+def notices_dismiss(app: App, ref: str, scope_flag: str | None) -> None:
+    scopes, _ = view_scopes(app.cfg, scope_flag)
+    cfg = app.cfg
+    today = calendar.today(cfg)
+    at = calendar.now(cfg)
+
+    def work(tx: ManagedTransaction) -> records.Record:
+        rec = records.resolve(tx, ref, scopes)
+        if rec.kind != "task" or rec.sched != "once":
+            what = f"a {rec.kind}" if rec.kind != "task" else f"a task on schedule {rec.sched}"
+            raise records.RecordError(f"[{rec.id}] is {what}; dismiss applies to --once notices")
+        if rec.done_at is not None or rec.archived_at is not None:
+            state = "done already" if rec.done_at is not None else "archived"
+            raise records.RecordError(f"[{rec.id}] is {state}; dismiss applies to open notices")
+        current = app.current_session(tx, scopes, at)
+        rec, _, written = records.mark_done(
+            tx, rec, comment="dismissed", today=today, cfg=cfg, at=at, session=app.stamp_of(current)
+        )
+        if not written:
+            raise records.RecordError(f"[{rec.id}] was already closed today")
+        touch_session(tx, current, at, rec.id)
+        return rec
+
+    with cli_errors():
+        rec = app.write(work)
+    emit_record(app, rec, "  · dismissed")
 
 
 @main.command(help="Spell out how a task's level is computed today.")

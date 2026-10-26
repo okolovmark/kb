@@ -30,7 +30,8 @@ place, and small enough to hand to an assistant at the start of every session.
 - **Urgency is computed, never maintained.** Five levels from silence to a scream, derived from the
   schedule, the events and a working-day calendar. `kb why <id>` prints the arithmetic.
 - **Five kinds of schedule**, because "due" is not one thing: a hard deadline, a soft plan, a
-  recurring window, an ageing thread, and a one-off notice that closes itself once you have seen it.
+  recurring window, an ageing thread, and a one-off notice that waits, off the standup, until you
+  dismiss it.
 - **Scopes keep work and life apart.** A personal record never appears in a project session, and a
   command reaching across scopes refuses by name instead of leaking the title.
 - **Sessions are records too.** What you did, what it touched and what it opened form one subgraph.
@@ -69,7 +70,8 @@ kb add "review the distributor PR"                            # no schedule: age
 
 kb today                     # the standup: everything at normal or above
 kb next                      # the same, down to a whisper
-kb notices show              # the one-off notices (--once): printed once, then closed
+kb notices show              # the one-off notices (--once), kept off the standup
+kb notices dismiss 301       # close one once read (the plugin pane has a dismiss button)
 kb why 144                   # why this one is loud today
 kb done 283 "shipped in the September release"
 kb snooze 144 2026-09-19

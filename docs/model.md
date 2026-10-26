@@ -146,7 +146,7 @@ A Task carries its schedule as properties: `sched` plus
 | `soft` | `--plan DATE` | `due` | as hard until the date, then normal with `decide: rebalance or done (T+n)` |
 | `age` | no flag | `anchor` (default today) | working days since the anchor: whisper 5, normal 10, loud 15, never screams |
 | `window` | `--window weekend\|sat,sun\|RRULE` | `window_rrule`, `anchor` (rrule start), `skips`, `backlog` | normal inside a window, silent outside; an untouched window counts as skipped when the next standup runs (`today`, `next` and `show` write the `skip`); backlog after 2 skips; nothing is counted while snoozed |
-| `once` | `--once` | | a notice: normal until `kb notices show` or a standup with `--record-shown` prints it, then done; not lowered by the day fit; snooze respected |
+| `once` | `--once` | | a notice for the user: normal until `kb notices dismiss` closes it, never on the standup (`today`, `next`), only in `kb notices`; not lowered by the day fit; snooze respected |
 
 Shared: `days` (`work` / `off` / `any`, default by scope: project work, personal off, global any;
 a mismatch with today lowers the level by one except at scream), `repeat`
@@ -169,18 +169,22 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
 - `kb today [--scope S] [--record-shown]` — the standup: `kb today <date> (<scope>)`, the Odoo line
   when the last sync failed, every open task at level 2..4 as `[id] L<n> <name>  <title>  ·
   <reason>`, then `+N quiet (whisper), kb next`, then the sessions closed without a summary in the
-  last 7 days. `--record-shown` writes a `shown` event per printed task and closes printed `once`
-  tasks. Exit 0 always.
-- `kb next [--scope S]` — like today, down to whisper; writes no `shown` events, though the lazy
-  window `skip`s still happen.
+  last 7 days. `--record-shown` writes a `shown` event per printed task. `once` tasks (notices) are
+  left out of the list, the `--json` tasks and the `quiet` count. Exit 0 always.
+- `kb next [--scope S]` — like today, down to whisper, notices left out as well; writes no `shown`
+  events, though the lazy window `skip`s still happen.
 - `kb notices [--scope S]` — how many notices (`once` tasks at normal) wait, never their text:
-  `N notices wait: kb notices show prints them and closes them`, or `no notices`; `{scope, count,
-  ids}` under `--json`. Writes nothing; exit 0 always. A session hook prints the count, and the
-  assistant hands the user `kb notices show` to run in their own terminal: the notices are the
-  user's to read, and their text never enters the assistant's context.
+  `N notices wait: kb notices show prints them, kb notices dismiss <id> closes one`, or
+  `no notices`; `{scope, count, ids}` under `--json`. Writes nothing; exit 0 always. Notices are
+  the user's to read: the kb plugin's pane lists them above the standup, a card each with a
+  dismiss button, and its band shows the count; their text never enters the assistant's context.
 - `kb notices show [--scope S]` — prints `kb notices <date> (<scope>)` and each waiting notice as
-  `[id] title` with its body indented, and closes each one as `--record-shown` does: a `shown`
-  event, then done with the note `shown`.
+  `[id] title` with its body indented; `{date, scope, notices: [{id, scope, title, body}]}` under
+  `--json`. Writes nothing: a notice stays until it is dismissed.
+- `kb notices dismiss REF [--scope S]` — closes one notice: a `done` event with the note
+  `dismissed`, then `done_at`; prints `[id] title  · dismissed`, the record under `--json`. Refuses
+  (exit 1) a record that is not a `once` task, one done already or archived, and one outside the
+  scope view.
 - `kb why REF` — the level computation spelled out: schedule, thresholds and their source, calendar,
   snooze, day fit, result.
 

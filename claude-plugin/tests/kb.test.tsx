@@ -13,7 +13,8 @@ import {
   writesSummary,
 } from '../hooks/journal'
 import { parseNode } from '../hooks/node'
-import { parseToday, plusDays } from '../hooks/today'
+import { noticesLabel, parseNotices, parseToday, plusDays } from '../hooks/today'
+import type { KbNotice } from '../types'
 
 const ROOT = '/p'
 const SID = 'sid-1'
@@ -47,6 +48,8 @@ const SHOW = JSON.stringify({
   links: [{ type: 'TOUCHED', direction: '<-', id: 592, title: 'requests' }],
   events: [{ kind: 'shown', at: '2026-10-07T02:33:32+00:00', note: null }],
 })
+const NOTICE_A: KbNotice = { id: 901, scope: 'proj', title: 'kb upgraded', body: 'first line\n\nafter a blank' }
+const NOTICE_B: KbNotice = { id: 902, scope: 'global', title: 'backup restored', body: '' }
 type Submitted = { text: string; origin: unknown }
 
 type Use = { tool_use_id: string; tool: string; input: Record<string, unknown>; text?: string }
@@ -59,6 +62,8 @@ function engine(
   history: Use[] = [],
   panes: Panes = { list: [], calls: [] },
   submitted: Submitted[] = [],
+  // the notices kb holds: `notices show` prints them, `notices dismiss` takes one out
+  waiting: KbNotice[] = [],
 ): MockClock {
   mock.env(on, { TMPDIR: '/t' })
   mock.store(on)
@@ -92,8 +97,21 @@ function engine(
   }))
   on('process.run', (_$, e) => {
     runs.push([...e.argv])
+    if (e.argv[1] === 'notices' && e.argv[2] === 'dismiss') {
+      const at = waiting.findIndex(notice => String(notice.id) === e.argv[3])
+      if (at >= 0) waiting.splice(at, 1)
+    }
+    const notices = JSON.stringify({ date: '2026-10-07', scope: 'proj', notices: waiting })
     const stdout =
-      e.argv[0] === 'git' ? 'beef123 [FIX] quiet commit\n' : e.argv[1] !== '--json' ? '' : e.argv[2] === 'show' ? SHOW : TODAY
+      e.argv[0] === 'git'
+        ? 'beef123 [FIX] quiet commit\n'
+        : e.argv[1] !== '--json'
+          ? ''
+          : e.argv[2] === 'show'
+            ? SHOW
+            : e.argv[2] === 'notices'
+              ? notices
+              : TODAY
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   // a commit with -q prints nothing; any other call answers with a commit line
@@ -139,6 +157,17 @@ describe('parsers', () => {
     expect(parseNode(SHOW)?.links[0]?.id).toBe(592)
     expect(parseNode('{"error": "no such record"}')).toBe(null)
   })
+
+  test('notices', async () => {
+    const shown = JSON.stringify({ date: '2026-10-07', scope: 'proj', notices: [NOTICE_A, { title: 'no id' }, NOTICE_B] })
+    expect(parseNotices(shown)).toEqual([NOTICE_A, NOTICE_B])
+    expect(parseNotices(JSON.stringify({ date: '2026-10-07', scope: 'proj', notices: [] }))).toEqual([])
+    // the standup is not the notices list, nor is an error
+    expect(parseNotices(TODAY)).toBe(null)
+    expect(parseNotices('kb: NO MEMORY')).toBe(null)
+    expect(noticesLabel(1)).toBe('1 notice')
+    expect(noticesLabel(3)).toBe('3 notices')
+  })
 })
 
 test('the band counts the standup; done asks before it closes', async ($, on) => {
@@ -152,6 +181,7 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
     expect(await band.find({ text: '1 loud' })).toBeDefined()
     expect(await band.find({ text: '1 due' })).toBeDefined()
     expect(await band.find({ text: '1 quiet' })).toBeDefined()
+    expect(await band.find({ text: /notice/ })).toBeUndefined()
     // no tips: nothing reveals on hover, nothing underlines
     expect(JSON.stringify(await band.drawn())).not.toMatch(/"hover"|"display":"none"/)
     await band.unmount()
@@ -160,6 +190,7 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(runs).toContainEqual(['kb', '--json', 'next'])
   expect(await pane.find({ text: /^my todo \d{4}-\d{2}-\d{2}$/ })).toBeDefined()
+  expect(await pane.find({ key: 'kb-notices' })).toBeUndefined()
   expect(await pane.find({ key: 'task-742' })).toBeUndefined()
   await pane.press({ key: 'kb-quiet' })
   expect(await pane.find({ key: 'task-742' })).toBeDefined()
@@ -173,6 +204,95 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
   await clock.advance(0)
   expect(runs).toContainEqual(['kb', 'snooze', '282', '2026-10-14'])
   await pane.unmount()
+})
+
+test('notices sit above the standup, a card each with the whole body', async ($, on) => {
+  const runs: string[][] = []
+  engine(on, runs, [], { list: [], calls: [] }, [], [{ ...NOTICE_A }, { ...NOTICE_B }])
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  expect(runs).toContainEqual(['kb', '--json', 'notices', 'show'])
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({ ...PANE, surface })
+    const boxes = (await pane.findAll({ type: 'Box' })).map(box => box.key)
+    expect(boxes.indexOf('kb-head')).toBeLessThan(boxes.indexOf('kb-notices'))
+    expect(boxes.indexOf('kb-notices')).toBeLessThan(boxes.indexOf('kb-legend'))
+    expect(boxes.indexOf('kb-notices')).toBeLessThan(boxes.indexOf('group-loud'))
+    expect(await pane.find({ text: '✉ notices' })).toBeDefined()
+    // a CSS surface draws the card bordered; the terminal gets plain rows
+    const card = await pane.find({ key: 'notice-901' })
+    expect(card?.props.borderStyle).toBe(surface === 'terminal' ? undefined : 'round')
+    expect(await pane.find({ type: 'Text', text: 'kb upgraded' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'backup restored' })).toBeDefined()
+    // the body whole, a row per line, the blank line kept
+    const rows = (await pane.findAll({ type: 'Text' })).map(text => text.text)
+    const first = rows.indexOf('first line')
+    expect(rows.slice(first, first + 3)).toEqual(['first line', ' ', 'after a blank'])
+    expect(await pane.find({ key: 'dismiss-901' })).toBeDefined()
+    expect(await pane.find({ key: 'dismiss-902' })).toBeDefined()
+    // a notice is no task: no open, done or snooze on it
+    expect(await pane.find({ key: 'open-901' })).toBeUndefined()
+    expect(await pane.find({ key: 'done-901' })).toBeUndefined()
+    await pane.unmount()
+  }
+})
+
+test('dismiss runs kb from a timer, then the card and at last the block leave', async ($, on) => {
+  const runs: string[][] = []
+  const clock = engine(on, runs, [], { list: [], calls: [] }, [], [{ ...NOTICE_A }, { ...NOTICE_B }])
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  runs.length = 0
+  await pane.press({ key: 'dismiss-901' })
+  // the press returns at once: nothing has run yet
+  expect(runs).toEqual([])
+  await clock.advance(0)
+  expect(runs).toContainEqual(['kb', 'notices', 'dismiss', '901'])
+  expect(runs).toContainEqual(['kb', '--json', 'notices', 'show'])
+  expect(runs).toContainEqual(['kb', '--json', 'next'])
+  expect(await pane.find({ key: 'notice-901' })).toBeUndefined()
+  expect(await pane.find({ key: 'notice-902' })).toBeDefined()
+
+  await pane.press({ key: 'dismiss-902' })
+  await clock.advance(0)
+  expect(runs).toContainEqual(['kb', 'notices', 'dismiss', '902'])
+  expect(await pane.find({ key: 'kb-notices' })).toBeUndefined()
+  expect(await pane.find({ key: 'kb-head' })).toBeDefined()
+  expect(await pane.find({ key: 'task-207' })).toBeDefined()
+  await pane.unmount()
+})
+
+test('the band shows the notices apart from the level counts', async ($, on) => {
+  const runs: string[][] = []
+  const waiting = [{ ...NOTICE_A }]
+  const clock = engine(on, runs, [], { list: [], calls: [] }, [], waiting)
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await $.ui.mount({ ...BAND, surface })
+    expect(await band.find({ text: /^1 notice$/ })).toBeDefined()
+    // the levels count the standup alone, which kb keeps notices out of
+    expect(await band.find({ text: '1 loud' })).toBeDefined()
+    expect(await band.find({ text: '1 normal' })).toBeDefined()
+    expect(await band.find({ text: '1 quiet' })).toBeDefined()
+    await band.unmount()
+  }
+
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  waiting.push({ ...NOTICE_B })
+  await pane.press({ key: 'kb-refresh' })
+  await clock.advance(0)
+  expect(await band.find({ text: /^2 notices$/ })).toBeDefined()
+  await pane.press({ key: 'dismiss-901' })
+  await clock.advance(0)
+  await pane.press({ key: 'dismiss-902' })
+  await clock.advance(0)
+  expect(await band.find({ text: /notice/ })).toBeUndefined()
+  expect(await band.find({ text: '1 loud' })).toBeDefined()
+  await pane.unmount()
+  await band.unmount()
 })
 
 test('close session asks Claude for the full close; the row tracks closed and what came after', async ($, on) => {

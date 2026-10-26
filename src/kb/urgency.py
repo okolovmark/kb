@@ -276,8 +276,8 @@ def raw_level(
 def day_fit(task: Record, today: dt.date, cfg: Config, lvl: int, reason: str) -> tuple[int, str]:
     """Lower by one when the task's ``days`` does not fit today.
 
-    Scream and silence are unchanged; ``once`` is exempt (a notification fires on the next
-    session whatever the day).
+    Scream and silence are unchanged; ``once`` is exempt (a notice waits in the kb pane
+    whatever the day).
     """
     days = task.days or "any"
     if lvl in (SILENT, SCREAM) or days == "any" or task.sched == "once":
