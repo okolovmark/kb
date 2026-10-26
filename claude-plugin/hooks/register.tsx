@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 
-import type { Journal, KbTask } from '../types'
+import type { Journal, KbNotice, KbTask } from '../types'
 import {
   EMPTY_JOURNAL,
   closePrompt,
@@ -15,11 +15,13 @@ import {
   sinceSummary,
 } from './journal'
 import { parseNode } from './node'
-import { LEVELS, countByLevel, levelStyle, parseToday, plusDays } from './today'
+import { LEVELS, countByLevel, levelStyle, noticesLabel, parseNotices, parseToday, plusDays } from './today'
 
 const PANE = 'kb-today'
 // the band row's and the pane's name: it lists tasks alone, not the notes and sessions kb also holds
 const TITLE = 'my todo'
+// the notices block's header and the band's count of it
+const NOTICE = { glyph: '✉', color: 'suggestion' } as const
 const REFRESH_MS = 5 * 60_000
 const JOURNALS_KEPT = 30
 const WIDE = 110
@@ -28,6 +30,7 @@ type Verb = 'done' | 'snooze' | 'week' | 'skip'
 type Target = { id: number; sched: string }
 
 const today = atom({ plugin: 'kb', key: 'today' } as const, null)
+const notices = atom({ plugin: 'kb', key: 'notices' } as const, null)
 const armed = atom({ plugin: 'kb', key: 'armed' } as const, null)
 const busy = atom({ plugin: 'kb', key: 'busy' } as const, null)
 const node = atom({ plugin: 'kb', key: 'node' } as const, null)
@@ -45,7 +48,12 @@ function failure(run: ProcessRunResult): string {
   return (run.stderr.trim() || run.stdout.trim()).split('\n')[0]?.slice(0, 160) ?? ''
 }
 
+// the standup and the notices, which kb keeps off the standup
 async function refreshToday($: EngineInterface): Promise<void> {
+  await Promise.all([refreshStandup($), refreshNotices($)])
+}
+
+async function refreshStandup($: EngineInterface): Promise<void> {
   try {
     // `next` is today's list down to whisper; it writes no shown events
     const run = await kb($, ['--json', 'next'])
@@ -57,6 +65,21 @@ async function refreshToday($: EngineInterface): Promise<void> {
     await update($, today, () => parsed)
   } catch (error) {
     $.ui.log(`kb: no standup: ${String(error)}`, { to: 'debug' })
+  }
+}
+
+async function refreshNotices($: EngineInterface): Promise<void> {
+  try {
+    // `show` only prints them: a notice closes on its dismiss alone
+    const run = await kb($, ['--json', 'notices', 'show'])
+    const parsed = run.exitCode === 0 ? parseNotices(run.stdout) : null
+    if (parsed === null) {
+      $.ui.log(`kb: no notices: ${failure(run)}`, { to: 'debug' })
+      return
+    }
+    await update($, notices, () => parsed)
+  } catch (error) {
+    $.ui.log(`kb: no notices: ${String(error)}`, { to: 'debug' })
   }
 }
 
@@ -138,6 +161,17 @@ async function act($: EngineInterface, task: Target, verb: Verb): Promise<void> 
   }
 }
 
+async function dismiss($: EngineInterface, id: number): Promise<void> {
+  await update($, busy, () => id)
+  try {
+    const run = await kb($, ['notices', 'dismiss', String(id)])
+    $.ui.toast(run.exitCode === 0 ? `kb notices dismiss ${id}` : `kb notices dismiss [${id}] failed: ${failure(run)}`)
+    await refreshToday($)
+  } finally {
+    await update($, busy, () => null)
+  }
+}
+
 // the commit a `git commit -q` made, which printed nothing to read it from
 async function quietCommit($: EngineInterface, command: string): Promise<string[]> {
   const dir = commitDirOf(command, await $.session.cwd())
@@ -209,7 +243,10 @@ async function writeJournal($: EngineInterface): Promise<string> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await $.command.register({ name: 'kb', description: "Open kb's standup pane (today's tasks with done/snooze)" })
+    await $.command.register({
+      name: 'kb',
+      description: "Open kb's standup pane (notices with dismiss, today's tasks with done/snooze)",
+    })
     await $.command.register({
       name: 'journal',
       description: "Write this session's kb journal from the transcript and the files, commits and PRs it touched",
@@ -265,6 +302,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return below
     const { Box, Button, Text } = $.ui.resolve(e)
     const data = await read($, today)
+    const waiting = (await read($, notices))?.length ?? 0
     const j = await read($, journal)
     const counts = data === null ? null : countByLevel(data.tasks)
 
@@ -274,6 +312,7 @@ export const register: Register = on => {
         {counts !== null && (
           <Box key="kb-today-row" flexDirection="row" columnGap={1} alignItems="center">
             <Text dimColor>{TITLE}</Text>
+            {waiting > 0 && <Text color={NOTICE.color}>{noticesLabel(waiting)}</Text>}
             {counts.loud > 0 && <Text color="red">{`${counts.loud} loud`}</Text>}
             <Text color="yellow">{`${counts.normal} normal`}</Text>
             {counts.due > 0 && <Text bold>{`${counts.due} due`}</Text>}
@@ -308,6 +347,7 @@ export const register: Register = on => {
     if ((await read($, view)) !== null) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     const data = await read($, today)
+    const waiting = (await read($, notices)) ?? []
     const armedId = await read($, armed)
     const busyId = await read($, busy)
     const isQuietShown = await read($, showQuiet)
@@ -358,6 +398,36 @@ export const register: Register = on => {
       </Box>
     )
 
+    // the body whole, a row per line so every surface keeps its breaks; a blank line stays a row
+    const noticeCard = (notice: KbNotice) => (
+      <Box
+        key={`notice-${notice.id}`}
+        flexDirection="column"
+        rowGap={hasCards ? 1 : 0}
+        borderStyle={hasCards ? 'round' : undefined}
+        borderDimColor={hasCards ? true : undefined}
+      >
+        <Box flexDirection="row" columnGap={2} rowGap={1} justifyContent="space-between" alignItems="center" flexWrap="wrap">
+          <Box flexDirection="row" columnGap={1}>
+            <Text dimColor>{`[${notice.id}]`}</Text>
+            <Text bold>{notice.title}</Text>
+          </Box>
+          {busyId === notice.id ? (
+            <Text dimColor>working…</Text>
+          ) : (
+            <Button key={`dismiss-${notice.id}`} label="dismiss" onPress={() => soon($, () => dismiss($, notice.id))} />
+          )}
+        </Box>
+        {notice.body !== '' && (
+          <Box flexDirection="column">
+            {notice.body.split('\n').map(line => (
+              <Text>{line === '' ? ' ' : line}</Text>
+            ))}
+          </Box>
+        )}
+      </Box>
+    )
+
     const groups = LEVELS.map(style => ({ style, tasks: data.tasks.filter(task => levelStyle(task.level) === style) }))
 
     return (
@@ -369,6 +439,15 @@ export const register: Register = on => {
           </Box>
           <Button key="kb-refresh" label="refresh" onPress={() => soon($, () => refreshToday($))} />
         </Box>
+        {waiting.length > 0 && (
+          <Box key="kb-notices" flexDirection="column" rowGap={1}>
+            <Box flexDirection="row" columnGap={1} alignItems="center">
+              <Text bold color={NOTICE.color}>{`${NOTICE.glyph} notices`}</Text>
+              <Text dimColor>{`${waiting.length}`}</Text>
+            </Box>
+            {waiting.map(noticeCard)}
+          </Box>
+        )}
         <Box key="kb-legend" flexDirection="row" columnGap={2} flexWrap="wrap">
           {LEVELS.map(style => (
             <Text color={style.color}>{`${style.glyph} ${style.name}`}</Text>

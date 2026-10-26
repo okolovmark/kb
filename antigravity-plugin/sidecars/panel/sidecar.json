@@ -3,7 +3,7 @@
   "args": ["server.mjs"],
   "restart_policy": "always",
   "display_name": "kb",
-  "description": "Knowledge graph standup pane (today's tasks with done, snooze, +7d, skip), record viewer, and session journal.",
+  "description": "Knowledge graph standup pane (notices with dismiss, today's tasks with done, snooze, +7d, skip), record viewer, and session journal.",
   "has_web_ui": true,
   "env": {
     "UI_THEME_VERSION": "1"

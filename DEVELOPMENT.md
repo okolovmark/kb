@@ -4,8 +4,10 @@ Building, testing and changing kb, and where the code lives. Back to the [README
 
 ```sh
 nix develop                           # Python 3.14 venv: kb editable from src/, pytest, ruff, uv; neo4j on PATH; KB_NEO4J_PACKAGE set
-pytest                                # 314 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
+pytest                                # 317 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
 ruff check . && ruff format --check .
+claude plugin test claude-plugin      # the Claude Code plugin; claude plugin validate claude-plugin checks its manifest and hooks
+node --test tests/antigravity/*.test.mjs   # the Antigravity panel's notices: notices.mjs on a stub kb, its client script in a vm
 uv lock                               # after editing dependencies; uv.lock is what the flake builds (UV_NO_SYNC=1 in the shell)
 ```
 
@@ -36,8 +38,11 @@ src/kb/            cli.py (click group, every command), setup.py (kb-setup), con
                    migrate_journal.py (journal days)
 tests/             pytest; conftest starts the throwaway Neo4j; fixtures/state_sample.md,
                    fixtures/nodes/ (five memory nodes and one file without frontmatter),
-                   fixtures/journal/ (three day files and one of edge cases)
+                   fixtures/journal/ (three day files and one of edge cases);
+                   antigravity/ (node:test, kept out of the plugin folder kb-setup syncs)
 docs/              install.md, configuration.md, model.md, migration.md, adr/ (decision records)
-claude-plugin/     the Claude Code plugin: hooks/ (standup pane, session journal),
+claude-plugin/     the Claude Code plugin: hooks/ (standup pane with notices, session journal),
                    skills/kb-consolidate (review and apply kb consolidate with the user)
+antigravity-plugin/ the Antigravity sidecar: sidecars/panel/server.mjs (API and page),
+                   notices.mjs (the notices block's kb calls)
 ```

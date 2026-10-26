@@ -1,7 +1,7 @@
 {
   "name": "kb",
   "displayName": "kb",
-  "description": "Knowledge graph standup pane (today's tasks by urgency with done, snooze, +7d, skip), record viewer with links & events, and session journal status with one-click session close.",
+  "description": "Knowledge graph standup pane (notices with dismiss, today's tasks by urgency with done, snooze, +7d, skip), record viewer with links & events, and session journal status with one-click session close.",
   "logo": "assets/logo.svg",
   "version": "1.0.0"
 }

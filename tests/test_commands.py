@@ -569,28 +569,40 @@ def test_today_orders_filters_and_counts(kb_env, monkeypatch) -> None:
 
 
 @pytest.mark.usefixtures("kb_env")
-def test_today_record_shown_writes_events_and_closes_once_tasks(monkeypatch) -> None:
+def test_today_record_shown_writes_events_and_leaves_notices_alone(monkeypatch) -> None:
     once = add("Tell me once", "--once")
     loud = add("Soon", "--due", "2026-09-16")
     quiet = add("Far", "--due", "2026-09-28")
-    plain = kb("today", "--scope", "proj")
-    assert f"[{once}] L2 normal  Tell me once  · once" in plain.output
-    assert events(str(once)) == ["created"]
 
     monkeypatch.setenv("KB_SESSION", "sess-1")
     shown = kb("today", "--scope", "proj", "--record-shown")
-    assert f"[{once}] L2 normal  Tell me once  · once" in shown.output
-    assert events(str(once)) == ["done", "shown", "created"]
-    once_rec = kb_json("show", str(once))
-    assert once_rec["done_at"] is not None
-    assert once_rec["events"][0]["note"] == "shown"
-    assert once_rec["events"][0]["session"] == "sess-1"
+    assert f"[{loud}] L3 loud  Soon  · T-2" in shown.output
     assert events(str(loud)) == ["shown", "created"]
+    assert kb_json("show", str(loud))["events"][0]["session"] == "sess-1"
     assert events(str(quiet)) == ["created"]  # whisper is not printed, so not shown
-    after = kb("today", "--scope", "proj")
-    assert str(once) not in after.output
+    assert events(str(once)) == ["created"]  # a notice is off the standup: never shown, open
+    assert kb_json("show", str(once))["done_at"] is None
     kb("next", "--scope", "proj")
     assert events(str(quiet)) == ["created"]
+
+
+@pytest.mark.usefixtures("kb_env")
+def test_today_and_next_leave_notices_out() -> None:
+    once = add("Tell me once", "--once")
+    glob = kb_json("add", "Global notice", "--once", "--scope", "global")["id"]
+    normal = add("Soon enough", "--due", "2026-09-19")
+    quiet = add("Far", "--due", "2026-09-28")
+    for name in ("today", "next"):
+        out = kb(name, "--scope", "proj").output
+        assert "Tell me once" not in out and "Global notice" not in out, name
+        as_json = kb_json(name, "--scope", "proj")
+        ids = [t["id"] for t in as_json["tasks"]]
+        assert once not in ids and glob not in ids, name
+    assert [t["id"] for t in kb_json("today", "--scope", "proj")["tasks"]] == [normal]
+    assert kb_json("today", "--scope", "proj")["quiet"] == 1
+    assert [t["id"] for t in kb_json("next", "--scope", "proj")["tasks"]] == [normal, quiet]
+    # they wait in kb notices instead
+    assert kb_json("notices", "--scope", "proj")["ids"] == [once, glob]
 
 
 @pytest.mark.usefixtures("kb_env")
@@ -866,18 +878,19 @@ def test_invalid_rrule_on_one_task_does_not_kill_today() -> None:
 
 
 @pytest.mark.usefixtures("kb_env")
-def test_once_is_shown_on_a_weekend_and_can_be_snoozed(monkeypatch) -> None:
-    once = str(add("Tell me once", "--once"))  # days=work by scope
+def test_once_waits_on_a_weekend_and_can_be_snoozed(monkeypatch) -> None:
+    once = add("Tell me once", "--once")  # days=work by scope
     monkeypatch.setenv("KB_TODAY", "2026-09-19")  # Saturday
-    assert f"[{once}] L2 normal  Tell me once  · once" in kb("today", "--scope", "proj").output
-    kb("snooze", once, "2026-09-21")
-    assert once not in kb("today", "--scope", "proj").output
+    assert kb_json("notices", "--scope", "proj")["ids"] == [once]
+    assert kb_json("show", str(once))["urgency"]["reason"] == "once"
+    kb("snooze", str(once), "2026-09-21")
+    assert kb_json("notices", "--scope", "proj")["ids"] == []
     monkeypatch.setenv("KB_TODAY", "2026-09-21")
-    assert once in kb("today", "--scope", "proj").output
+    assert kb_json("notices", "--scope", "proj")["ids"] == [once]
 
 
 @pytest.mark.usefixtures("kb_env")
-def test_notices_count_then_show_prints_and_closes(monkeypatch) -> None:
+def test_notices_count_and_show_write_nothing(monkeypatch) -> None:
     once = add("Tell me once", "--once", "--body", "first line\n\nafter a blank")
     snoozed = str(add("Later", "--once"))
     kb("snooze", snoozed, "2026-09-16")
@@ -886,17 +899,17 @@ def test_notices_count_then_show_prints_and_closes(monkeypatch) -> None:
     loud = add("Soon", "--due", "2026-09-16")
 
     count = kb("notices", "--scope", "proj")
-    assert count.output == "2 notices wait: kb notices show prints them and closes them\n"
+    assert count.output == (
+        "2 notices wait: kb notices show prints them, kb notices dismiss <id> closes one\n"
+    )
     assert kb_json("notices", "--scope", "proj") == {
         "scope": "proj",
         "count": 2,
         "ids": [once, glob],
     }
-    assert events(str(once)) == ["created"]  # counting writes nothing
 
     monkeypatch.setenv("KB_SESSION", "sess-1")
-    shown = kb("notices", "show", "--scope", "proj").output.splitlines()
-    assert shown == [
+    expected = [
         f"kb notices {MONDAY} (proj)",
         f"[{once}] Tell me once",
         "  first line",
@@ -904,20 +917,84 @@ def test_notices_count_then_show_prints_and_closes(monkeypatch) -> None:
         "  after a blank",
         f"[{glob}] Global notice",
     ]
-    assert events(str(once)) == ["done", "shown", "created"]
-    rec = kb_json("show", str(once))
-    assert rec["done_at"] is not None and rec["events"][0]["session"] == "sess-1"
+    assert kb("notices", "show", "--scope", "proj").output.splitlines() == expected
+    # shown twice: a show closes nothing, so the second prints the same
+    assert kb("notices", "show", "--scope", "proj").output.splitlines() == expected
+    assert kb_json("notices", "show", "--scope", "proj") == {
+        "date": MONDAY,
+        "scope": "proj",
+        "notices": [
+            {
+                "id": once,
+                "scope": "proj",
+                "title": "Tell me once",
+                "body": "first line\n\nafter a blank",
+            },
+            {"id": glob, "scope": "global", "title": "Global notice", "body": ""},
+        ],
+    }
+    assert events(str(once)) == ["created"] and events(str(glob)) == ["created"]
+    assert kb_json("show", str(once))["done_at"] is None
     assert events(snoozed) == ["snooze", "created"]
     assert events(str(plain)) == ["created"] and events(str(loud)) == ["created"]
 
+    monkeypatch.setenv("KB_TODAY", "2026-09-16")
+    assert kb("notices", "--scope", "proj").output.startswith("3 notices wait:")
+    waiting = kb_json("notices", "show", "--scope", "proj")["notices"]
+    assert [n["id"] for n in waiting] == [once, int(snoozed), glob]
+    assert waiting[1] == {"id": int(snoozed), "scope": "proj", "title": "Later", "body": ""}
+
+
+@pytest.mark.usefixtures("kb_env")
+def test_notices_dismiss_closes_one_with_a_dismissed_done(monkeypatch) -> None:
+    once = add("Tell me once", "--once")
+    other = add("Tell me too", "--once")
+    monkeypatch.setenv("KB_SESSION", "sess-1")
+
+    out = kb("notices", "dismiss", str(once), "--scope", "proj").output
+    assert out == f"[{once}] Tell me once  · dismissed\n"
+    rec = kb_json("show", str(once))
+    assert rec["done_at"] is not None
+    assert [e["kind"] for e in rec["events"]] == ["done", "created"]
+    assert rec["events"][0]["note"] == "dismissed"
+    assert rec["events"][0]["session"] == "sess-1"
+    assert kb_json("notices", "--scope", "proj") == {"scope": "proj", "count": 1, "ids": [other]}
+    assert kb("notices", "--scope", "proj").output.startswith("1 notice waits:")
+
+    as_json = kb_json("notices", "dismiss", str(other), "--scope", "proj")
+    assert as_json["id"] == other and as_json["done_at"] is not None
     assert kb("notices", "--scope", "proj").output == "no notices\n"
     assert kb("notices", "show", "--scope", "proj").output.splitlines()[1:] == ["no notices"]
-    assert kb_json("notices", "show", "--scope", "proj")["notices"] == []
-    monkeypatch.setenv("KB_TODAY", "2026-09-16")
-    assert kb("notices", "--scope", "proj").output.startswith("1 notice waits:")
-    assert kb_json("notices", "show", "--scope", "proj")["notices"] == [
-        {"id": int(snoozed), "scope": "proj", "title": "Later", "body": ""}
-    ]
+
+
+@pytest.mark.usefixtures("kb_env")
+def test_notices_dismiss_refuses_what_is_no_open_notice() -> None:
+    plain = add("An ageing thread")
+    due = add("Soon", "--due", "2026-09-16")
+    note = kb_json("add", "A note", "--kind", "note", "--scope", "proj")["id"]
+    done = add("Seen", "--once")
+    kb("notices", "dismiss", str(done), "--scope", "proj")
+    archived = add("Gone", "--once")
+    kb("archive", str(archived), "--reason", "test", "--scope", "proj")
+    elsewhere = kb_json("add", "Personal notice", "--once", "--scope", "personal")["id"]
+
+    def refusal(ref: int) -> str:
+        return kb("notices", "dismiss", str(ref), "--scope", "proj", code=1).output.strip()
+
+    notices_only = "dismiss applies to --once notices"
+    assert refusal(plain) == f"Error: [{plain}] is a task on schedule age; {notices_only}"
+    assert refusal(due) == f"Error: [{due}] is a task on schedule hard; {notices_only}"
+    assert refusal(note) == f"Error: [{note}] is a note; {notices_only}"
+    assert refusal(done) == f"Error: [{done}] is done already; dismiss applies to open notices"
+    assert refusal(archived) == f"Error: [{archived}] is archived; dismiss applies to open notices"
+    assert refusal(elsewhere) == (
+        f"Error: not visible in this scope: [{elsewhere}] is in scope personal; "
+        "rerun with --scope personal"
+    )
+    assert kb_json("show", str(elsewhere))["done_at"] is None
+    assert events(str(plain)) == ["created"] and events(str(due)) == ["created"]
+    kb("notices", "dismiss", str(elsewhere), "--scope", "personal")
+    assert kb_json("show", str(elsewhere))["done_at"] is not None
 
 
 @pytest.mark.usefixtures("kb_env")
