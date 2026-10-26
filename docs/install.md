@@ -28,7 +28,7 @@ when the unit or conf changed.
 | `~/.local/share/kb/neo4j-pkg` | indirect nix GC root for the neo4j package the unit runs |
 | `~/kb-backups/` | dumps; created by the first `kb backup` / `kb restore`, 0700 |
 | `~/.claude/settings.json` | `env.CLAUDE_CODE_PLUGIN_DIRS` gets the kb plugin folder, when `~/.claude` exists (below) |
-| `~/.gemini/config/plugins/kb/` | the Antigravity UI sidecar plugin (`kb/panel`), synced when `~/.gemini/antigravity` exists |
+| `~/.gemini/config/plugins/kb/` | the Antigravity UI sidecar plugin (`kb/panel`: notices with dismiss above the standup, `N notices` in its summary, the standup's tasks, a record viewer, the session journal), synced when `~/.gemini/antigravity` exists |
 
 Neo4j is `pkgs.neo4j` from the flake's nixpkgs pin (`nix build .#neo4j`); its store path is baked
 into the `kb` and `kb-setup` wrappers as `KB_NEO4J_PACKAGE` and written into the unit.

@@ -5,10 +5,14 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { SidecarApp } from 'sidecar_sdk';
+import { dismissNotice, loadNotices } from './notices.mjs';
 
 const execFileAsync = promisify(execFile);
 
-watchFile(fileURLToPath(import.meta.url), { interval: 1000 }, () => process.exit(1));
+// a synced update of either module restarts the sidecar (restart_policy always)
+for (const url of [import.meta.url, new URL('./notices.mjs', import.meta.url)]) {
+  watchFile(fileURLToPath(url), { interval: 1000 }, () => process.exit(1));
+}
 
 const HOME = homedir();
 const GEMINI_CONFIG_DIR = join(HOME, '.gemini', 'config');
@@ -504,6 +508,24 @@ const HTML = `<!DOCTYPE html>
       color: #e2e8f0;
       border-color: rgba(148, 163, 184, 0.32);
     }
+    .badge-notice {
+      background: rgba(45, 212, 191, 0.16);
+      color: #5eead4;
+      border-color: rgba(45, 212, 191, 0.38);
+    }
+    .notice-row-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .notice-body {
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--wi-text-sec);
+      margin-top: 6px;
+    }
     .group-header {
       display: flex;
       align-items: center;
@@ -658,6 +680,8 @@ const HTML = `<!DOCTYPE html>
     function levelStyle(level) {
       return LEVELS.find((s) => Number(level) >= s.level) || LEVELS[3];
     }
+    // the notices block's header and the summary's count of it
+    const NOTICE = { glyph: '✉', color: '#5eead4' };
 
     let state = null;
     let viewingNode = null;
@@ -751,6 +775,23 @@ const HTML = `<!DOCTYPE html>
         if (viewingNode && viewingNode.id === task.id) {
           await openNode(task.id);
         }
+      } finally {
+        busyTaskId = null;
+        render();
+      }
+    }
+
+    async function dismissNotice(id) {
+      busyTaskId = id;
+      render();
+      try {
+        const res = await window.sidecar.fetch('/api/dismiss', {
+          method: 'POST',
+          body: JSON.stringify({ id, workspaceUris }),
+        });
+        const out = await res.json();
+        showToast(out.message || \`kb notices dismiss \${id}\`);
+        await loadStandup();
       } finally {
         busyTaskId = null;
         render();
@@ -884,7 +925,36 @@ const HTML = `<!DOCTYPE html>
         </div>\`;
     }
 
+    // a card per waiting notice: title, the whole body (pre-wrap keeps its line breaks), dismiss
+    function renderNotices(notices) {
+      if (!Array.isArray(notices) || notices.length === 0) return '';
+      return \`
+        <div id="notices-block">
+          <div class="group-header">
+            <span style="color:\${NOTICE.color};">\${NOTICE.glyph} notices</span>
+            <span style="color:var(--wi-text-dim);font-weight:400;">\${notices.length}</span>
+          </div>
+          \${notices.map((n) => \`
+            <div class="card">
+              <div class="notice-row-top">
+                <div class="task-row-top">
+                  <span class="task-id">[\${n.id}]</span>
+                  <strong>\${escapeHtml(n.title)}</strong>
+                </div>
+                \${busyTaskId === n.id
+                  ? '<span style="color:var(--wi-text-dim);font-size:12px;">working…</span>'
+                  : \`<button class="dismiss-btn" data-id="\${n.id}">dismiss</button>\`}
+              </div>
+              \${n.body ? \`<div class="notice-body">\${escapeHtml(n.body)}</div>\` : ''}
+            </div>
+          \`).join('')}
+        </div>\`;
+    }
+
     function bindControlEvents() {
+      document.querySelectorAll('.dismiss-btn').forEach((btn) => {
+        btn.onclick = () => dismissNotice(Number(btn.dataset.id));
+      });
       document.querySelectorAll('.open-node-btn').forEach((btn) => {
         btn.onclick = () => openNode(Number(btn.dataset.id));
       });
@@ -933,9 +1003,12 @@ const HTML = `<!DOCTYPE html>
       renderSessionBar();
 
       const sumEl = document.getElementById('summary-bar');
+      const notices = Array.isArray(state?.notices) ? state.notices : [];
       if (today) {
+        // the level counts come from kb next, which leaves notices out; they get their own count
         const c = today.counts;
         sumEl.innerHTML = \`
+          \${notices.length > 0 ? \`<span class="badge badge-notice">\${notices.length === 1 ? '1 notice' : notices.length + ' notices'}</span>\` : ''}
           \${c.loud > 0 ? \`<span class="badge badge-red">\${c.loud} loud</span>\` : ''}
           <span class="badge badge-amber">\${c.normal} normal</span>
           \${c.due > 0 ? \`<span class="badge badge-ws">\${c.due} due</span>\` : ''}
@@ -1042,7 +1115,7 @@ const HTML = `<!DOCTYPE html>
         return;
       }
 
-      let html = \`
+      let html = renderNotices(notices) + \`
         <div class="legend">
           \${LEVELS.map((s) => \`<span style="color:\${s.color};font-weight:600;">\${s.glyph} \${s.name}</span>\`).join('')}
           <span>· whisper = quiet, folded below</span>
@@ -1152,14 +1225,16 @@ app.page('/', () => HTML);
 app.api('/api/state', async (data) => {
   const { wsRoot, activeUris } = resolveWorkspaceRoot(data?.workspaceUris);
   const convId = await resolveActiveConversationId(data?.conversationId, activeUris);
-  const [kbRes, journal] = await Promise.all([
+  const [kbRes, notices, journal] = await Promise.all([
     runKb(['--json', 'next'], wsRoot),
+    loadNotices(runKb, wsRoot),
     Promise.resolve(scanSessionJournal(convId, wsRoot)),
   ]);
   const today = kbRes.exitCode === 0 ? parseToday(kbRes.stdout) : null;
   return {
     workspaceName: basename(wsRoot),
     today,
+    notices,
     journal,
     error: today ? null : (kbRes.stderr || kbRes.stdout || '').trim().split('\n')[0],
   };
@@ -1197,6 +1272,11 @@ app.api('/api/act', async (data) => {
         ? `kb ${args.join(' ')}`
         : `kb ${args[0]} [${id}] failed: ${(res.stderr || res.stdout).trim().split('\n')[0]}`,
   };
+});
+
+app.api('/api/dismiss', async (data) => {
+  const { wsRoot } = resolveWorkspaceRoot(data?.workspaceUris);
+  return dismissNotice(runKb, wsRoot, data?.id);
 });
 
 app.api('/api/search', async (data) => {
