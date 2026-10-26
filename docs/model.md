@@ -160,7 +160,8 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
 - `kb notices [--scope S]` — how many notices (`once` tasks at normal) wait, never their text:
   `N notices wait: kb notices show prints them and closes them`, or `no notices`; `{scope, count,
   ids}` under `--json`. Writes nothing; exit 0 always. A session hook prints the count, and the
-  assistant asks the user before it reads them.
+  assistant hands the user `kb notices show` to run in their own terminal: the notices are the
+  user's to read, and their text never enters the assistant's context.
 - `kb notices show [--scope S]` — prints `kb notices <date> (<scope>)` and each waiting notice as
   `[id] title` with its body indented, and closes each one as `--record-shown` does: a `shown`
   event, then done with the note `shown`.

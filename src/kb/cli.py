@@ -1626,7 +1626,7 @@ def notices_line(count: int) -> str:
 @json_option
 @click.pass_context
 def notices_group(ctx: click.Context, scope_flag: str | None) -> None:
-    """The count a session hook prints, so the assistant asks before the notices are read."""
+    """The count a session hook prints; the user runs ``show`` in their own terminal."""
     if ctx.invoked_subcommand is not None:
         return
     app = ctx.find_object(App)
