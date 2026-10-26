@@ -13,13 +13,16 @@ Every record is `(:Record)` plus one kind label: `Task`, `Note`, `Howto`, `Feedb
 `Decision`, `Session`. Properties: `id` (from the Counter), `slug` (unique; derived from the title
 for every kind but Task), `kind`, `scope` (`global`, `personal` or a `[scopes]` name), `title`
 (120 chars), `summary` (optional one line; `index` prints it in place of the title, `show` under
-it), `body` (markdown), `created_at`, `updated_at`, `pinned` (default true for Feedback), `tags`,
-`source` (`manual` | `odoo`), `external_id`, `journal_ref`, `archived_at`, `done_at`, and on
-synced tasks `stage`, `synced_at` and `origin` (`odoo-sync` on records the sync created).
+it), `body` (markdown), `created_at`, `updated_at`, `pinned` (default true for Feedback),
+`pin_level` (`critical` | `normal` on a pinned record, absent otherwise; a record pinned before the
+levels has none and counts as normal), `tags`, `source` (`manual` | `odoo`), `external_id`,
+`journal_ref`, `archived_at`, `done_at`, and on synced tasks `stage`, `synced_at` and `origin`
+(`odoo-sync` on records the sync created).
 
 `kb add TITLE` creates one, a task unless `--kind` says otherwise, with the scope from `--scope`,
 else the cwd inside a `[scopes]` path, else an error. Its other flags: `--body TEXT|-`,
-`--body-file F`, `--summary S`, `--slug S`, `--pin/--no-pin`, `--tag T` (repeatable, from the
+`--body-file F`, `--summary S`, `--slug S`, `--pin/--no-pin`, `--critical` (pinned at level
+critical, implies `--pin`; neither applies to a task), `--tag T` (repeatable, from the
 scope's vocabulary, one area required: see [Tags](#tags)), `--link REL:REF` (repeatable), the
 schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--distinct` (see
 [Duplicates](#duplicates)).
@@ -30,7 +33,13 @@ schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--
   `--untag` removes one (never the last area tag of a record that needs one); with no flag it
   opens `$EDITOR` on the body. An `edited` event, carrying the previous values, is written only
   when something changed. On a task it resets `skips` and `backlog`.
-- `kb show REF` — header, the summary when set, schedule, `urgency: L<n> <name> — <reason>`, body,
+- `kb pin REF [--critical | --normal]` — `pinned = true` at that level, normal by default;
+  `--normal` demotes a critical record. A task is refused. `kb unpin REF` — `pinned = false`,
+  `pin_level` removed. A change writes an `edited` event whose payload names the changed fields
+  with their `before` and `after` values; an unchanged state writes nothing and prints
+  `already pinned <level>` / `already unpinned` (`written: false` under `--json`, which also
+  carries the `before` state).
+- `kb show REF` — header (`pinned: critical | normal | no`), the summary when set, schedule, `urgency: L<n> <name> — <reason>`, body,
   links, last 10 events. On a session it adds the state line (`session: <id>  opened: …
   open|closed: …`) and groups its `OPENED_IN` / `TOUCHED` neighbours as `created here:` /
   `touched here:`.
@@ -47,10 +56,15 @@ schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--
 - `kb promote REF KEY` — tasks only: `source = odoo`, `external_id = KEY`. The ticket itself is
   created elsewhere; notes and howtos link to a task with `kb link`.
 - `kb index [--scope S] [--budget N] [--kinds K,...]` — the memory index a session hook prints:
-  a header, `## Pinned` (pinned records of the scope plus global), then `## Recent` (the rest by
-  `updated_at`), as lines `- [id] slug — summary` (the title when there is no summary, cut at 160
-  characters with `…`). Kinds default to `feedback,note,howto,reference,decision`. N is the total
-  line budget, pinned first (`[index].budget_lines`, N >= 1). Exit 0 always.
+  a header, `## Pinned` (pinned records of the scope plus global, critical ones first, then by
+  id), then `## Recent` (the rest by `updated_at`), as lines `- [id] slug — summary` (the title
+  when there is no summary, cut at 160 characters with `…`); a critical record reads
+  `- [id] CRITICAL slug — summary`. Every record line starts with `- [`, which is how a hook
+  finds the Pinned rules. Kinds default to `feedback,note,howto,reference,decision`. N is the
+  total line budget, pinned first, so a short budget drops normal rules before critical ones
+  (`[index].budget_lines`, N >= 1). `--json` prints `{date, scope, pinned, recent}`, each entry
+  `{id, kind, scope, slug, title, summary, pin_level}`, cut where the text is cut; on an error
+  `{error, pinned: [], recent: []}`. Exit 0 always.
 
 ## Tags
 
@@ -75,7 +89,8 @@ vocabulary is closed. Reasoning: [adr/0007](adr/0007-area-tags-from-a-repo-owned
   file is left alone.
 - `kb context REF [--scope S]` — what to read before working on a record: its area tags, then
   every knowledge record (note, feedback, howto, reference, decision) in the view sharing one, as
-  `[id] kind title — summary`, most shared areas first, then pinned, then most recently updated,
+  `[id] kind title — summary`, most shared areas first, then critical, then pinned, then most
+  recently updated,
   then the other open tasks in those areas. A record without an area tag is refused (exit 4)
   with the `kb edit REF --tag AREA` that fixes it.
 
@@ -108,7 +123,8 @@ that are not Odoo tasks, and prints once
 howtos in the view,
 
 - **merge** — records whose titles and summaries pass the duplicate threshold and whose area tags
-  are the same set; the kept one is pinned, else the longest, else the oldest. Commands:
+  are the same set; the kept one is critical, else pinned, else the longest, else the oldest.
+  Commands:
   `kb edit <keep> --body-file <merged.md>`, then `kb merge <dup> <keep>`.
 - **condense** — a body of 10 KB or more, with its count of dated paragraphs. Command:
   `kb edit <id> --body-file <condensed.md>`; the `edited` event keeps the full previous body.
@@ -171,7 +187,8 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
 ## Events and relationships
 
 Events are nodes `(:Event {kind, at, seq, note, payload, session})-[:ON]->(:Record)`; kinds:
-`created`, `edited` (payload: the changed fields and their `before` values), `done`, `skip` (one
+`created`, `edited` (payload: the changed fields and their `before` values; `pin` and `unpin` add
+their `after` values), `done`, `skip` (one
 per record and window, keyed on the window's last day), `snooze`, `shown`, `synced`, `promoted`,
 `archived`, `superseded`, `merged`, `linked`, `opened`, `closed`.
 
@@ -187,8 +204,8 @@ without the flag, the cwd inside a `[scopes]` path selects that project, and out
 everything is shown, `personal` included. `add` outside every path needs `--scope`.
 
 The same view rules every command that takes a REF (`show`, `links`, `graph`, `log`, `why`,
-`done`, `skip`, `snooze`, `append`, `edit`, `archive`, `supersede`, `merge`, `link`, `unlink`,
-`promote`, and the `--link` targets of `add`), each of which accepts `--scope S`: a record outside
+`done`, `skip`, `snooze`, `append`, `edit`, `pin`, `unpin`, `archive`, `supersede`, `merge`,
+`link`, `unlink`, `promote`, and the `--link` targets of `add`), each of which accepts `--scope S`: a record outside
 the view is refused with `not visible in this scope: [id] is in scope <s>; rerun with --scope <s>`
 (exit 1, no title printed), reads and writes alike. `links`, `graph` and the link section of `show`
 hide neighbours outside the view and end with `n linked records in other scopes (hidden)`

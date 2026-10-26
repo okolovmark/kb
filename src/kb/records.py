@@ -43,6 +43,8 @@ EVENT_KINDS = (
     "opened",
     "closed",
 )
+# a pinned record's level: critical ones print first and are the last a short budget drops
+PIN_LEVELS = ("critical", "normal")
 TITLE_MAX = 120
 SLUG_MAX = 60
 SESSION_SLUG = re.compile(r"^\d{4}-\d{2}-\d{2}-\d+$")
@@ -83,6 +85,7 @@ class Record:
     created_at: dt.datetime | None = None
     updated_at: dt.datetime | None = None
     pinned: bool = False
+    pin_level: str | None = None
     tags: list[str] = field(default_factory=list)
     source: str = "manual"
     external_id: str | None = None
@@ -111,9 +114,12 @@ class Record:
 
     @classmethod
     def from_node(cls, node: Node) -> Record:
-        """Build from a driver node, ignoring properties this version does not know."""
+        """Build from a driver node, ignoring properties this version does not know. A record
+        pinned before the levels has no ``pin_level`` and reads as normal; an unpinned one has
+        none."""
         names = {f.name for f in fields(cls)}
         data = {k: to_py(v) for k, v in node.items() if k in names}
+        data["pin_level"] = (data.get("pin_level") or "normal") if data.get("pinned") else None
         return cls(**data)
 
     def to_json(self) -> dict[str, Any]:
@@ -172,6 +178,19 @@ def check_kind(kind: str) -> str:
     if kind not in KINDS:
         raise RecordError(f"unknown kind {kind!r}; one of {', '.join(KINDS)}")
     return kind
+
+
+def check_pin_level(level: str) -> str:
+    if level not in PIN_LEVELS:
+        raise RecordError(f"unknown pin level {level!r}; one of {', '.join(PIN_LEVELS)}")
+    return level
+
+
+def pin_rank(rec: Record) -> int:
+    """0 critical, 1 pinned normal, 2 not pinned: the order pinned records are read in."""
+    if not rec.pinned:
+        return 2
+    return 0 if rec.pin_level == "critical" else 1
 
 
 def check_rel_type(rel: str) -> str:
@@ -464,10 +483,11 @@ def open_tasks(tx: ManagedTransaction, scopes: list[str] | None) -> list[Record]
 
 
 def pinned(tx: ManagedTransaction, scopes: list[str] | None, kinds: list[str]) -> list[Record]:
-    """Pinned, non-archived records of the kinds and scopes, by id."""
+    """Pinned, non-archived records of the kinds and scopes: critical first, then by id."""
     rows = tx.run(
         "MATCH (r:Record) WHERE r.pinned AND r.kind IN $kinds AND r.archived_at IS NULL "
-        "AND ($scopes IS NULL OR r.scope IN $scopes) RETURN r ORDER BY r.id",
+        "AND ($scopes IS NULL OR r.scope IN $scopes) "
+        "RETURN r ORDER BY CASE r.pin_level WHEN 'critical' THEN 0 ELSE 1 END, r.id",
         scopes=scopes,
         kinds=kinds,
     )
@@ -585,6 +605,7 @@ def create(
     summary: str | None = None,
     slug: str | None = None,
     pinned: bool | None = None,
+    pin_level: str | None = None,
     tags: list[str] | None = None,
     source: str = "manual",
     external_id: str | None = None,
@@ -609,7 +630,8 @@ def create(
     Non-task kinds get a slug: the given one, or one derived from the title and made unique.
     A session's slug is given and kept verbatim (``YYYY-MM-DD-<n>``), its *source* is the
     SessionStart matcher. A task needs a *schedule* (``sched`` plus its dates); the caller
-    knows today's date.
+    knows today's date. A pinned record gets *pin_level*, normal by default; a level implies
+    the pin.
     """
     check_kind(kind)
     title = check_title(title)
@@ -628,6 +650,12 @@ def create(
         raise RecordError("schedule flags apply to tasks only")
     if kind == "task" and not schedule:
         raise RecordError("a task needs a schedule")
+    if pin_level is not None:
+        check_pin_level(pin_level)
+        if pinned is False:
+            raise RecordError("a pin level needs the record pinned")
+        pinned = True
+    is_pinned = (kind == "feedback") if pinned is None else pinned
     rid = record_id if record_id is not None else next_id(tx)
     created = created_at or at
     props: dict[str, Any] = {
@@ -640,7 +668,8 @@ def create(
         "slug": slug,
         "created_at": created,
         "updated_at": created,
-        "pinned": (kind == "feedback") if pinned is None else pinned,
+        "pinned": is_pinned,
+        "pin_level": (pin_level or "normal") if is_pinned else None,
         "tags": list(tags or []),
         "source": source,
         "external_id": external_id,

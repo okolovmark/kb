@@ -20,7 +20,7 @@ from neo4j import ManagedTransaction
 from kb import similar, tags
 from kb.calendar import local_date
 from kb.config import Config
-from kb.records import Record
+from kb.records import Record, pin_rank
 
 KINDS = ("note", "reference", "feedback", "howto")
 ARCHIVE_KINDS = (*KINDS, "decision")
@@ -111,8 +111,8 @@ def _knowledge_links(tx: ManagedTransaction, ids: list[int]) -> dict[int, int]:
 
 
 def _keep(group: list[Record]) -> Record:
-    """Pinned first, then the longest body, then the oldest."""
-    return min(group, key=lambda r: (not r.pinned, -len(r.body), r.id))
+    """Critical first, then pinned, then the longest body, then the oldest."""
+    return min(group, key=lambda r: (pin_rank(r), -len(r.body), r.id))
 
 
 def _merges(

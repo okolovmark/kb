@@ -4,7 +4,7 @@ Building, testing and changing kb, and where the code lives. Back to the [README
 
 ```sh
 nix develop                           # Python 3.14 venv: kb editable from src/, pytest, ruff, uv; neo4j on PATH; KB_NEO4J_PACKAGE set
-pytest                                # 284 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
+pytest                                # 314 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
 ruff check . && ruff format --check .
 uv lock                               # after editing dependencies; uv.lock is what the flake builds (UV_NO_SYNC=1 in the shell)
 ```
