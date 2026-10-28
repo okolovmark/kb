@@ -27,7 +27,7 @@ scope's vocabulary, one area required: see [Tags](#tags)), `--link REL:REF` (rep
 schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--distinct` (see
 [Duplicates](#duplicates)).
 
-- `kb append REF TEXT` — body += `**<today>:** TEXT`.
+- `kb append REF TEXT` — body += `**<today>:** TEXT`. An empty or blank TEXT is refused (exit 2).
 - `kb edit REF [--title T] [--summary S] [--body TEXT|-] [--body-file F] [--tag T] [--untag T]` —
   `--summary ""` clears the summary; `--tag` adds a tag from the vocabulary of the record's scope,
   `--untag` removes one (never the last area tag of a record that needs one); with no flag it

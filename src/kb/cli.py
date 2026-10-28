@@ -943,6 +943,9 @@ def add(
 @pass_app
 def append(app: App, ref: str, text: str, scope_flag: str | None) -> None:
     """body += ``\\n\\n**<today>:** TEXT``; edited event."""
+    # an empty text would date a paragraph that says nothing
+    if not text.strip():
+        raise click.UsageError("the text is empty; nothing appended")
     scopes, _ = view_scopes(app.cfg, scope_flag)
     cfg = app.cfg
     today = calendar.today(cfg)
