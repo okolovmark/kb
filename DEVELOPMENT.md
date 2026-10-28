@@ -4,7 +4,7 @@ Building, testing and changing kb, and where the code lives. Back to the [README
 
 ```sh
 nix develop                           # Python 3.14 venv: kb editable from src/, pytest, ruff, uv; neo4j on PATH; KB_NEO4J_PACKAGE set
-pytest                                # 317 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
+pytest                                # 319 tests; one throwaway Neo4j per run from KB_NEO4J_PACKAGE (auth off, tx-log preallocation off), ~45 s
 ruff check . && ruff format --check .
 claude plugin test claude-plugin      # the Claude Code plugin; claude plugin validate claude-plugin checks its manifest and hooks
 node --test tests/antigravity/*.test.mjs   # the Antigravity panel's notices: notices.mjs on a stub kb, its client script in a vm

@@ -275,6 +275,17 @@ def test_append_and_edit(tmp_path) -> None:
 
 
 @pytest.mark.usefixtures("kb_env")
+def test_append_refuses_an_empty_text() -> None:
+    rid = str(add("Nothing to add"))
+    kb("append", rid, "kept")
+    for blank in ("", "   ", "\n\t"):
+        refused = kb("append", rid, blank, code=2)
+        assert refused.output.splitlines()[-1] == "Error: the text is empty; nothing appended"
+    assert kb_json("show", rid)["body"] == f"**{MONDAY}:** kept"
+    assert events(rid) == ["edited", "created"]
+
+
+@pytest.mark.usefixtures("kb_env")
 def test_edit_opens_the_editor_when_no_flag_is_given(monkeypatch) -> None:
     rid = str(add("Editable"))
     monkeypatch.setattr("click.edit", lambda text, **_kw: text + "\nmore\n")

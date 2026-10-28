@@ -27,7 +27,7 @@ scope's vocabulary, one area required: see [Tags](#tags)), `--link REL:REF` (rep
 schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--distinct` (see
 [Duplicates](#duplicates)).
 
-- `kb append REF TEXT` — body += `**<today>:** TEXT`.
+- `kb append REF TEXT` — body += `**<today>:** TEXT`. An empty or blank TEXT is refused (exit 2).
 - `kb edit REF [--title T] [--summary S] [--body TEXT|-] [--body-file F] [--tag T] [--untag T]` —
   `--summary ""` clears the summary; `--tag` adds a tag from the vocabulary of the record's scope,
   `--untag` removes one (never the last area tag of a record that needs one); with no flag it
@@ -70,8 +70,11 @@ schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--
 
 Two kinds: an **area** names a module or subsystem and pulls context (`kb context`); a **type**
 says what kind of work a record is (`bug`, `feature`, `refactor`, `review`, `testing`, `docs`,
-`config`, `research`, `discussion`, `cleanup`, `migration`, `data_fix`) and pulls nothing. The
-vocabulary is closed. Reasoning: [adr/0007](adr/0007-area-tags-from-a-repo-owned-closed-vocabulary.md).
+`config`, `research`, `discussion`, `cleanup`, `migration`, `data_fix`) and pulls the knowledge
+records of that type from any area, so a rule about migrations reaches every task tagged
+`migration`. The vocabulary is closed. Reasoning:
+[adr/0007](adr/0007-area-tags-from-a-repo-owned-closed-vocabulary.md),
+[adr/0008](adr/0008-type-tags-pull-knowledge-by-topic.md).
 
 - **Areas.** A project scope's areas come from `.kb/tags.toml` at its `[scopes]` path (format in
   [configuration.md](configuration.md#kbtagstoml)), plus kb's built-in areas: `kb`,
@@ -87,12 +90,14 @@ vocabulary is closed. Reasoning: [adr/0007](adr/0007-area-tags-from-a-repo-owned
   types with how many records in the view carry each, and the tags in use outside the vocabulary.
 - `kb tags init [--scope S]` — writes a seed `.kb/tags.toml` at the project's root; an existing
   file is left alone.
-- `kb context REF [--scope S]` — what to read before working on a record: its area tags, then
-  every knowledge record (note, feedback, howto, reference, decision) in the view sharing one, as
-  `[id] kind title — summary`, most shared areas first, then critical, then pinned, then most
-  recently updated,
-  then the other open tasks in those areas. A record without an area tag is refused (exit 4)
-  with the `kb edit REF --tag AREA` that fixes it.
+- `kb context REF [--scope S]` — what to read before working on a record: its area tags, its
+  type tags (a `types:` line, only when it has some), then every knowledge record (note,
+  feedback, howto, reference, decision) in the view sharing an area or a type, as
+  `[id] kind title — summary`, most shared areas first, then most shared types, then critical,
+  then pinned, then most recently updated, then the other open tasks in its areas (types pull no
+  tasks). `--json` prints `{id, kind, scope, title, areas, types, knowledge, tasks}`, each
+  knowledge entry with the `areas` and `types` it shares. A record without an area tag is
+  refused (exit 4) with the `kb edit REF --tag AREA` that fixes it.
 
 ## Duplicates
 

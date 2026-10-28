@@ -943,6 +943,9 @@ def add(
 @pass_app
 def append(app: App, ref: str, text: str, scope_flag: str | None) -> None:
     """body += ``\\n\\n**<today>:** TEXT``; edited event."""
+    # an empty text would date a paragraph that says nothing
+    if not text.strip():
+        raise click.UsageError("the text is empty; nothing appended")
     scopes, _ = view_scopes(app.cfg, scope_flag)
     cfg = app.cfg
     today = calendar.today(cfg)
@@ -2585,27 +2588,29 @@ def tags_init(app: App, scope_flag: str | None) -> None:
     app.emit({"file": str(path), "written": True}, f"wrote {path}")
 
 
-def shared_areas(rec: records.Record, areas: list[str]) -> list[str]:
-    return [t for t in rec.tags if t in areas]
+def shared_tags(rec: records.Record, wanted: list[str]) -> list[str]:
+    return [t for t in rec.tags if t in wanted]
 
 
 @main.command(
-    help="What to read before working on a record: its area tags, the knowledge records "
-    "sharing an area, and the other open tasks there. Exit 4 on a record with no area tag."
+    help="What to read before working on a record: its area and type tags, the knowledge "
+    "records sharing an area or a type, and the other open tasks in its areas. Exit 4 on a "
+    "record with no area tag."
 )
 @click.argument("ref")
 @scope_option
 @json_option
 @pass_app
 def context(app: App, ref: str, scope_flag: str | None) -> None:
-    """``[id] kind title — summary`` per knowledge record, most shared areas first; bodies are
-    read on demand with kb show."""
+    """``[id] kind title — summary`` per knowledge record, most shared areas first, then most
+    shared types; bodies are read on demand with kb show. A type pulls knowledge only: a rule
+    about a kind of work (a migration, a data fix) reaches a task in any module doing it."""
     cfg = app.cfg
     scopes, _ = view_scopes(cfg, scope_flag)
 
     def work(
         tx: ManagedTransaction,
-    ) -> tuple[records.Record, list[str], list[records.Record], list[records.Record]]:
+    ) -> tuple[records.Record, list[str], list[str], list[records.Record], list[records.Record]]:
         rec = records.resolve(tx, ref, scopes)
         vocab = tags.load(cfg, rec.scope)
         areas = vocab.area_tags(rec.tags)
@@ -2614,27 +2619,31 @@ def context(app: App, ref: str, scope_flag: str | None) -> None:
                 f"[{rec.id}] has no area tag; tag it first: kb edit {rec.id} --tag AREA; "
                 f"{vocab.listing()}"
             )
-        knowledge = records.tagged(tx, scopes, records.KNOWLEDGE_KINDS, areas)
+        types = vocab.type_tags(rec.tags)
+        knowledge = records.tagged(tx, scopes, records.KNOWLEDGE_KINDS, areas + types)
         tasks = records.tagged(tx, scopes, ("task",), areas, open_only=True)
-        return rec, areas, knowledge, [t for t in tasks if t.id != rec.id]
+        return rec, areas, types, knowledge, [t for t in tasks if t.id != rec.id]
 
     with cli_errors():
-        rec, areas, knowledge, tasks = app.read(work)
+        rec, areas, types, knowledge, tasks = app.read(work)
     knowledge = sorted(
         (k for k in knowledge if k.id != rec.id),
         key=lambda k: (
-            -len(shared_areas(k, areas)),
+            -len(shared_tags(k, areas)),
+            -len(shared_tags(k, types)),
             records.pin_rank(k),
             -(k.updated_at.timestamp() if k.updated_at else 0),
             k.id,
         ),
     )
-    tasks.sort(key=lambda t: (-len(shared_areas(t, areas)), t.id))
+    tasks.sort(key=lambda t: (-len(shared_tags(t, areas)), t.id))
 
     def knowledge_line(k: records.Record) -> str:
         return f"  [{k.id}] {k.kind} {k.title}" + (f" — {k.summary}" if k.summary else "")
 
-    lines = [record_line(rec), f"areas: {', '.join(areas)}", f"knowledge ({len(knowledge)}):"]
+    lines = [record_line(rec), f"areas: {', '.join(areas)}"]
+    lines += [f"types: {', '.join(types)}"] if types else []
+    lines += [f"knowledge ({len(knowledge)}):"]
     lines += [knowledge_line(k) for k in knowledge]
     lines += [f"open tasks ({len(tasks)}):", *(f"  [{t.id}] {t.title}" for t in tasks)]
     app.emit(
@@ -2644,6 +2653,7 @@ def context(app: App, ref: str, scope_flag: str | None) -> None:
             "scope": rec.scope,
             "title": rec.title,
             "areas": areas,
+            "types": types,
             "knowledge": [
                 {
                     "id": k.id,
@@ -2652,12 +2662,13 @@ def context(app: App, ref: str, scope_flag: str | None) -> None:
                     "slug": k.slug,
                     "title": k.title,
                     "summary": k.summary,
-                    "areas": shared_areas(k, areas),
+                    "areas": shared_tags(k, areas),
+                    "types": shared_tags(k, types),
                 }
                 for k in knowledge
             ],
             "tasks": [
-                {"id": t.id, "scope": t.scope, "title": t.title, "areas": shared_areas(t, areas)}
+                {"id": t.id, "scope": t.scope, "title": t.title, "areas": shared_tags(t, areas)}
                 for t in tasks
             ],
         },
