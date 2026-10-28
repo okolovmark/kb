@@ -36,8 +36,9 @@ place, and small enough to hand to an assistant at the start of every session.
   command reaching across scopes refuses by name instead of leaking the title.
 - **Sessions are records too.** What you did, what it touched and what it opened form one subgraph.
 - **Context by area.** Records carry area tags from a vocabulary the project keeps in its own repo;
-  `kb context <task>` lists what is known about those areas before the work starts, and `kb add`
-  refuses a record that duplicates an open one.
+  `kb context <task>` lists what is known about those areas, and the rules for the kind of work
+  the task does, before the work starts, and `kb add` refuses a record that duplicates an open
+  one.
 - **Raw Cypher whenever you want it.** `kb query` reads and writes; the commands are a convenience,
   not a cage.
 - **Installed through Nix, database included.** One `nix profile install`, one `kb-setup`, no
@@ -123,7 +124,8 @@ snooze and sync, each one stamped with the session that wrote it.
 plus `OPENED_IN` and `TOUCHED`, which a session uses to say what it created and what it changed.
 
 **Tags** are closed too. An area tag names a module or subsystem and pulls context; a type tag
-(`bug`, `feature`, `docs`, …) says what kind of work it is. A project's areas live in
+(`bug`, `migration`, `data_fix`, …) says what kind of work it is and pulls the knowledge records
+of the same type, whatever their area. A project's areas live in
 `.kb/tags.toml` in its repository, so a team shares one list and changes it by pull request.
 
 The urgency table, the working-day calendar and the session rules are in

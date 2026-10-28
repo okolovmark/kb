@@ -218,7 +218,7 @@ def test_context_needs_an_area_tag(kb_env) -> None:
 
 def test_context_lists_knowledge_and_open_tasks_sharing_an_area(kb_env) -> None:
     write_areas(kb_env, '[areas]\ndemo = "x"\nbilling = "y"\nother = "z"\n')
-    task = add("Fix the invoice dates", "--tag", "demo", "--tag", "billing", "--tag", "bug")
+    task = add("Fix the invoice dates", "--tag", "demo", "--tag", "billing")
     both = add(
         "Billing and demo gotchas",
         "--kind",
@@ -234,7 +234,6 @@ def test_context_lists_knowledge_and_open_tasks_sharing_an_area(kb_env) -> None:
     add("Elsewhere", "--kind", "note", "--tag", "other")
     gone = add("Old demo note", "--kind", "note", "--tag", "demo")
     kb("archive", str(gone), "--reason", "test")
-    add("A bug note", "--kind", "note", "--tag", "other", "--tag", "bug")  # types pull nothing
     glob = add("Global gotcha", "--kind", "feedback", "--tag", "workflow", scope="global")
     raw_tags(kb_env, glob, ["workflow", "demo"])  # an old tag still matches
     hidden = add("Personal", "--kind", "note", "--tag", "home", scope="personal")
@@ -256,3 +255,45 @@ def test_context_lists_knowledge_and_open_tasks_sharing_an_area(kb_env) -> None:
         f"  [{both}] reference Billing and demo gotchas — read this first",
     ]
     assert text[-2:] == ["open tasks (1):", f"  [{sibling}] Another demo task"]
+
+
+def test_context_pulls_knowledge_sharing_a_type_from_any_area(kb_env) -> None:
+    write_areas(kb_env, '[areas]\ndemo = "x"\nother = "z"\n')
+    task = add("Normalise the vendor codes", "--tag", "demo", "--tag", "migration")
+    area = add("Howto for the demo screen", "--kind", "howto", "--tag", "demo")
+    both = add(
+        "Upgrade scripts in this module", "--kind", "note", "--tag", "demo", "--tag", "migration"
+    )
+    rule = add(
+        "ORM writes can vanish while the stamp survives",
+        "--kind",
+        "reference",
+        "--tag",
+        "other",
+        "--tag",
+        "migration",
+        "--summary",
+        "flush, then check by SQL",
+    )
+    add("Raw SQL sweeps", "--kind", "reference", "--tag", "other", "--tag", "data_fix")
+    add("Port the old ledger", "--tag", "other", "--tag", "migration")  # types pull no tasks
+    data = kb_json("context", str(task), "--scope", "proj")
+    assert (data["areas"], data["types"]) == (["demo"], ["migration"])
+    # shared areas first, then shared types: a rule from another module comes last
+    assert [(k["id"], k["areas"], k["types"]) for k in data["knowledge"]] == [
+        (both, ["demo"], ["migration"]),
+        (area, ["demo"], []),
+        (rule, [], ["migration"]),
+    ]
+    assert data["tasks"] == []
+    assert kb("context", str(task), "--scope", "proj").output.splitlines() == [
+        f"[{task}] Normalise the vendor codes",
+        "areas: demo",
+        "types: migration",
+        "knowledge (3):",
+        f"  [{both}] note Upgrade scripts in this module",
+        f"  [{area}] howto Howto for the demo screen",
+        f"  [{rule}] reference ORM writes can vanish while the stamp survives — flush, then "
+        "check by SQL",
+        "open tasks (0):",
+    ]

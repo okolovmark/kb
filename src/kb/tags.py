@@ -1,9 +1,10 @@
 """Tag vocabulary: area tags from the project's ``.kb/tags.toml`` plus kb's built-in areas, and
-the built-in type tags (docs/adr/0007).
+the built-in type tags (docs/adr/0007, 0008).
 
 Area tags name a module or subsystem and pull context (``kb context``); type tags say what
-kind of work a record is and pull nothing. The vocabulary is closed: ``add`` and ``edit``
-refuse a tag outside it, while tags records already carry stay as they are.
+kind of work a record is and pull the knowledge records of the same type, whatever their area.
+The vocabulary is closed: ``add`` and ``edit`` refuse a tag outside it, while tags records
+already carry stay as they are.
 """
 
 import re
@@ -98,6 +99,10 @@ class Vocabulary:
         """The tags in *tags* that are areas of this vocabulary, in their order."""
         areas = self.areas
         return [t for t in tags if t in areas]
+
+    def type_tags(self, tags: list[str]) -> list[str]:
+        """The tags in *tags* that are type tags, in their order."""
+        return [t for t in tags if t in TYPE_TAGS]
 
     def check(self, tags: list[str]) -> list[str]:
         """*tags* normalised (lower case, trimmed, each once); TagError naming the unknown."""

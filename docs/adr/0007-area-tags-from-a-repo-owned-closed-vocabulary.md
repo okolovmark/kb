@@ -1,7 +1,8 @@
 # 0007 Area tags from a repo-owned closed vocabulary
 
 Date: 2026-10-22
-Status: accepted
+Status: accepted; amended by [0008](0008-type-tags-pull-knowledge-by-topic.md) (type tags pull
+knowledge records too)
 
 ## Context
 
