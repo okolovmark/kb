@@ -175,7 +175,8 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
   when the last sync failed, every open task at level 2..4 as `[id] L<n> <name>  <title>  ·
   <reason>`, then `+N quiet (whisper), kb next`, then the sessions closed without a summary in the
   last 7 days. `--record-shown` writes a `shown` event per printed task. `once` tasks (notices) are
-  left out of the list, the `--json` tasks and the `quiet` count. Exit 0 always.
+  left out of the list, the `--json` tasks and the `quiet` count. `--json` also carries `others`:
+  every open task below normal, whisper and silent, listed or not. Exit 0 always.
 - `kb next [--scope S] [--all]` — like today, down to whisper (`--all`: down to silent, every open
   task), notices left out as well; writes no `shown` events, though the lazy window `skip`s still
   happen.

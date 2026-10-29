@@ -1526,6 +1526,8 @@ def standup(
         return
     shown = [r for r in rows if r.level >= min_level]
     quiet = sum(1 for r in rows if r.level == urgency.WHISPER) if min_level > urgency.WHISPER else 0
+    # every open task below normal, listed or not: what the panes fold under "others"
+    others = sum(1 for r in rows if r.level < urgency.NORMAL)
     failed = meta is not None and meta.get("ok") is False
     if app.as_json:
         app.emit(
@@ -1547,6 +1549,7 @@ def standup(
                     for r in shown
                 ],
                 "quiet": quiet,
+                "others": others,
                 "no_summary": [
                     {
                         "id": s.id,

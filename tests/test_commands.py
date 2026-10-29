@@ -560,6 +560,7 @@ def test_today_orders_filters_and_counts(kb_env, monkeypatch) -> None:
     ids = [scream, old, glob, loud, normal_soft, whisper, silent]
     assert [t["id"] for t in every["tasks"]] == ids
     assert every["tasks"][-1]["name"] == "silent" and every["quiet"] == 0
+    assert every["others"] == 2
     assert kb("next", "--scope", "proj", "--all").output.splitlines()[-1] == (
         f"[{silent}] L0 silent  Fresh  · 0 working days since 2026-09-14"
     )
@@ -586,6 +587,8 @@ def test_today_orders_filters_and_counts(kb_env, monkeypatch) -> None:
     assert as_json["date"] == MONDAY and as_json["scope"] == "proj" and as_json["odoo"] is None
     assert [t["id"] for t in as_json["tasks"]] == [scream, old, glob, loud, normal_soft]
     assert as_json["quiet"] == 1
+    # others: below normal, the silent one included, though today lists neither
+    assert as_json["others"] == 2
     assert as_json["tasks"][0]["name"] == "scream"
 
 
