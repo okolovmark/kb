@@ -39,11 +39,11 @@ export function noticesLabel(count: number): string {
   return count === 1 ? '1 notice' : `${count} notices`
 }
 
-export function countByLevel(tasks: readonly KbTask[]): { loud: number; normal: number; quiet: number; due: number } {
+export function countByLevel(tasks: readonly KbTask[]): { loud: number; normal: number; others: number; due: number } {
   return {
     loud: tasks.filter(task => task.level >= 3).length,
     normal: tasks.filter(task => task.level === 2).length,
-    quiet: tasks.filter(task => task.level <= 1).length,
+    others: tasks.filter(task => task.level <= 1).length,
     due: tasks.filter(task => task.due !== null).length,
   }
 }
@@ -54,12 +54,13 @@ export function plusDays(isoDate: string, days: number): string {
   return day.toISOString().slice(0, 10)
 }
 
-// kb's urgency levels (urgency.py LEVEL_NAMES); `kb next` lists down to whisper, the "quiet" ones
+// kb's urgency levels (urgency.py LEVEL_NAMES) down to normal; `kb next --all` lists every open task,
+// and the ones below normal, whisper and silent alike, are the others
 export const LEVELS = [
   { level: 4, name: 'scream', glyph: '◉', color: 'magenta' },
   { level: 3, name: 'loud', glyph: '●', color: 'red' },
   { level: 2, name: 'normal', glyph: '○', color: 'yellow' },
-  { level: 1, name: 'whisper', glyph: '◦', color: 'subtle' },
+  { level: 0, name: 'others', glyph: '◦', color: 'subtle' },
 ] as const
 
 export function levelStyle(level: number): (typeof LEVELS)[number] {

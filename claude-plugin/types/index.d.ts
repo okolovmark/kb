@@ -67,12 +67,12 @@ declare module 'claude-code' {
       // the task whose `done` waits for a yes, and the task (or notice) whose command runs
       armed: number | null
       busy: number | null
-      // the record the node pane shows; whether the pane lists the whisper tasks
+      // the record the node pane shows; whether the pane lists the others, the tasks below normal
       node: KbNode | null
       // the record being fetched, shown as loading meanwhile; the record the pane shows (null = the list)
       nodeLoading: number | null
       view: number | null
-      showQuiet: boolean
+      showOthers: boolean
       journal: Journal
     }
   }

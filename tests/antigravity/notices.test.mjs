@@ -84,7 +84,7 @@ async function panel(notices) {
       if (path === '/api/state') {
         data = {
           workspaceName: 'p',
-          today: { date: '2026-10-26', scope: 'proj', tasks: TASKS, quiet: 0, noSummary: 0, counts: { loud: 1, normal: 1, quiet: 0, due: 1 } },
+          today: { date: '2026-10-26', scope: 'proj', tasks: TASKS, noSummary: 0, counts: { loud: 1, normal: 1, others: 0, due: 1 } },
           notices: notices.slice(),
           journal: null,
         };

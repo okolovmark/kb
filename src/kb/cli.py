@@ -1589,10 +1589,12 @@ def today(app: App, scope_flag: str | None, record_shown: bool) -> None:
 
 @main.command("next", help="Like today, down to whisper level; writes no shown events.")
 @click.option("--scope", "scope_flag")
+@click.option("--all", "everything", is_flag=True, help="Down to silent: every open task.")
 @json_option
 @pass_app
-def next_(app: App, scope_flag: str | None) -> None:
-    standup(app, scope_flag, min_level=urgency.WHISPER, record_shown=False, name="next")
+def next_(app: App, scope_flag: str | None, everything: bool) -> None:
+    min_level = urgency.SILENT if everything else urgency.WHISPER
+    standup(app, scope_flag, min_level=min_level, record_shown=False, name="next")
 
 
 # --- notices ----------------------------------------------------------------------------

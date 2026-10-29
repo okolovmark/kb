@@ -176,8 +176,9 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
   <reason>`, then `+N quiet (whisper), kb next`, then the sessions closed without a summary in the
   last 7 days. `--record-shown` writes a `shown` event per printed task. `once` tasks (notices) are
   left out of the list, the `--json` tasks and the `quiet` count. Exit 0 always.
-- `kb next [--scope S]` — like today, down to whisper, notices left out as well; writes no `shown`
-  events, though the lazy window `skip`s still happen.
+- `kb next [--scope S] [--all]` — like today, down to whisper (`--all`: down to silent, every open
+  task), notices left out as well; writes no `shown` events, though the lazy window `skip`s still
+  happen.
 - `kb notices [--scope S]` — how many notices (`once` tasks at normal) wait, never their text:
   `N notices wait: kb notices show prints them, kb notices dismiss <id> closes one`, or
   `no notices`; `{scope, count, ids}` under `--json`. Writes nothing; exit 0 always. Notices are

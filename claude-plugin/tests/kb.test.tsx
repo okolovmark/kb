@@ -21,12 +21,13 @@ const SID = 'sid-1'
 const TODAY = JSON.stringify({
   date: '2026-10-07',
   scope: 'proj',
-  quiet: 3,
+  quiet: 0,
   no_summary: [],
   tasks: [
     { id: 207, level: 3, name: 'loud', reason: '30 working days', title: 'part standard', scope: 'proj', sched: 'age', due: null },
     { id: 282, level: 2, name: 'normal', reason: 'decide (T+0)', title: 'payment terms', scope: 'proj', sched: 'soft', due: '2026-10-07' },
     { id: 742, level: 1, name: 'whisper', reason: '9 working days', title: 'estimate seed', scope: 'proj', sched: 'age', due: null },
+    { id: 760, level: 0, name: 'silent', reason: '2 working days', title: 'fresh thread', scope: 'proj', sched: 'age', due: null },
   ],
 })
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -150,7 +151,7 @@ describe('parsers', () => {
   })
 
   test('today, dates and the reply', async () => {
-    expect(parseToday(TODAY)?.tasks.length).toBe(3)
+    expect(parseToday(TODAY)?.tasks.length).toBe(4)
     expect(parseToday('kb: NO MEMORY')).toBe(null)
     expect(plusDays('2026-10-28', 7)).toBe('2026-11-04')
     expect(parseJournalReply('TITLE: t\n\nIntent: i')).toEqual({ title: 't', body: 'Intent: i' })
@@ -180,7 +181,7 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
     expect(await band.find({ text: 'my todo' })).toBeDefined()
     expect(await band.find({ text: '1 loud' })).toBeDefined()
     expect(await band.find({ text: '1 due' })).toBeDefined()
-    expect(await band.find({ text: '1 quiet' })).toBeDefined()
+    expect(await band.find({ text: '2 others' })).toBeDefined()
     expect(await band.find({ text: /notice/ })).toBeUndefined()
     // no tips: nothing reveals on hover, nothing underlines
     expect(JSON.stringify(await band.drawn())).not.toMatch(/"hover"|"display":"none"/)
@@ -188,12 +189,18 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
   }
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(runs).toContainEqual(['kb', '--json', 'next'])
+  expect(runs).toContainEqual(['kb', '--json', 'next', '--all'])
   expect(await pane.find({ text: /^my todo \d{4}-\d{2}-\d{2}$/ })).toBeDefined()
+  expect(await pane.find({ text: 'proj · 2 on the standup · 2 others' })).toBeDefined()
   expect(await pane.find({ key: 'kb-notices' })).toBeUndefined()
+  // whisper and silent alike fold under others
+  expect(await pane.find({ key: 'group-others' })).toBeDefined()
+  expect(await pane.find({ key: 'group-whisper' })).toBeUndefined()
   expect(await pane.find({ key: 'task-742' })).toBeUndefined()
-  await pane.press({ key: 'kb-quiet' })
+  expect(await pane.find({ key: 'task-760' })).toBeUndefined()
+  await pane.press({ key: 'kb-others' })
   expect(await pane.find({ key: 'task-742' })).toBeDefined()
+  expect(await pane.find({ key: 'task-760' })).toBeDefined()
   await pane.press({ key: 'done-207' })
   expect(runs.some(argv => argv[1] === 'done')).toBe(false)
   expect(await pane.find({ text: 'close [207]?' })).toBeDefined()
@@ -250,7 +257,7 @@ test('dismiss runs kb from a timer, then the card and at last the block leave', 
   await clock.advance(0)
   expect(runs).toContainEqual(['kb', 'notices', 'dismiss', '901'])
   expect(runs).toContainEqual(['kb', '--json', 'notices', 'show'])
-  expect(runs).toContainEqual(['kb', '--json', 'next'])
+  expect(runs).toContainEqual(['kb', '--json', 'next', '--all'])
   expect(await pane.find({ key: 'notice-901' })).toBeUndefined()
   expect(await pane.find({ key: 'notice-902' })).toBeDefined()
 
@@ -275,7 +282,7 @@ test('the band shows the notices apart from the level counts', async ($, on) => 
     // the levels count the standup alone, which kb keeps notices out of
     expect(await band.find({ text: '1 loud' })).toBeDefined()
     expect(await band.find({ text: '1 normal' })).toBeDefined()
-    expect(await band.find({ text: '1 quiet' })).toBeDefined()
+    expect(await band.find({ text: '2 others' })).toBeDefined()
     await band.unmount()
   }
 

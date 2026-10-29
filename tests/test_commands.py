@@ -553,6 +553,16 @@ def test_today_orders_filters_and_counts(kb_env, monkeypatch) -> None:
     assert nxt[0] == "kb next 2026-09-14 (proj)"
     assert nxt[-1] == f"[{whisper}] L1 whisper  Far  · T-14"
     assert "quiet" not in nxt[-1]
+    assert str(silent) not in "\n".join(nxt)
+
+    # --all goes down to silent: every open task, the done one and other scopes still out
+    every = kb_json("next", "--scope", "proj", "--all")
+    ids = [scream, old, glob, loud, normal_soft, whisper, silent]
+    assert [t["id"] for t in every["tasks"]] == ids
+    assert every["tasks"][-1]["name"] == "silent" and every["quiet"] == 0
+    assert kb("next", "--scope", "proj", "--all").output.splitlines()[-1] == (
+        f"[{silent}] L0 silent  Fresh  · 0 working days since 2026-09-14"
+    )
 
     # personal shows with --scope personal, and from outside every scope path (no filter)
     assert (
