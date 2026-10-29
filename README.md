@@ -71,6 +71,7 @@ kb add "review the distributor PR"                            # no schedule: age
 
 kb today                     # the standup: everything at normal or above
 kb next                      # the same, down to a whisper
+kb next --all                # every open task, the silent ones too
 kb notices show              # the one-off notices (--once), kept off the standup
 kb notices dismiss 301       # close one once read (the plugin pane has a dismiss button)
 kb why 144                   # why this one is loud today

@@ -24,7 +24,7 @@ const LEVELS = [
   { level: 4, name: 'scream', glyph: '◉', color: '#e879f9', badgeClass: 'badge-purple' },
   { level: 3, name: 'loud', glyph: '●', color: '#f87171', badgeClass: 'badge-red' },
   { level: 2, name: 'normal', glyph: '○', color: '#fbbf24', badgeClass: 'badge-amber' },
-  { level: 1, name: 'whisper', glyph: '◦', color: '#94a3b8', badgeClass: 'badge-muted' },
+  { level: 0, name: 'others', glyph: '◦', color: '#94a3b8', badgeClass: 'badge-muted' },
 ];
 
 function levelStyle(level) {
@@ -154,14 +154,13 @@ function parseToday(stdout) {
   const counts = {
     loud: tasks.filter((t) => t.level >= 3).length,
     normal: tasks.filter((t) => t.level === 2).length,
-    quiet: tasks.filter((t) => t.level <= 1).length,
+    others: tasks.filter((t) => t.level <= 1).length,
     due: tasks.filter((t) => t.due !== null && t.due !== undefined).length,
   };
   return {
     date: raw.date || new Date().toISOString().slice(0, 10),
     scope: raw.scope || '',
     tasks,
-    quiet: raw.quiet ?? counts.quiet,
     noSummary: Array.isArray(raw.no_summary) ? raw.no_summary.length : 0,
     counts,
   };
@@ -675,7 +674,7 @@ const HTML = `<!DOCTYPE html>
       { level: 4, name: 'scream', glyph: '◉', color: '#e879f9' },
       { level: 3, name: 'loud', glyph: '●', color: '#f87171' },
       { level: 2, name: 'normal', glyph: '○', color: '#fbbf24' },
-      { level: 1, name: 'whisper', glyph: '◦', color: '#94a3b8' },
+      { level: 0, name: 'others', glyph: '◦', color: '#94a3b8' },
     ];
     function levelStyle(level) {
       return LEVELS.find((s) => Number(level) >= s.level) || LEVELS[3];
@@ -686,7 +685,7 @@ const HTML = `<!DOCTYPE html>
     let state = null;
     let viewingNode = null;
     let searchResults = null;
-    let showQuiet = false;
+    let showOthers = false;
     let armedTaskId = null;
     let busyTaskId = null;
     let isClosingSession = false;
@@ -994,7 +993,7 @@ const HTML = `<!DOCTYPE html>
       document.getElementById('scope-badge').textContent =
         today?.scope || state?.workspaceName || 'kaertech-odoo-16';
       document.getElementById('date-badge').textContent = today
-        ? \`today \${today.date} · \${today.tasks.length - today.counts.quiet} standup · \${today.counts.quiet} quiet\`
+        ? \`today \${today.date} · \${today.tasks.length - today.counts.others} standup · \${today.counts.others} others\`
         : '';
 
       const todayBtn = document.getElementById('today-btn');
@@ -1005,14 +1004,14 @@ const HTML = `<!DOCTYPE html>
       const sumEl = document.getElementById('summary-bar');
       const notices = Array.isArray(state?.notices) ? state.notices : [];
       if (today) {
-        // the level counts come from kb next, which leaves notices out; they get their own count
+        // the level counts come from kb next --all, which leaves notices out; they get their own count
         const c = today.counts;
         sumEl.innerHTML = \`
           \${notices.length > 0 ? \`<span class="badge badge-notice">\${notices.length === 1 ? '1 notice' : notices.length + ' notices'}</span>\` : ''}
           \${c.loud > 0 ? \`<span class="badge badge-red">\${c.loud} loud</span>\` : ''}
           <span class="badge badge-amber">\${c.normal} normal</span>
           \${c.due > 0 ? \`<span class="badge badge-ws">\${c.due} due</span>\` : ''}
-          <span class="badge badge-muted">\${c.quiet} quiet</span>
+          <span class="badge badge-muted">\${c.others} others</span>
           \${today.noSummary > 0 ? \`<span class="badge badge-amber">\${today.noSummary} without summary</span>\` : ''}
         \`;
       } else {
@@ -1118,7 +1117,7 @@ const HTML = `<!DOCTYPE html>
       let html = renderNotices(notices) + \`
         <div class="legend">
           \${LEVELS.map((s) => \`<span style="color:\${s.color};font-weight:600;">\${s.glyph} \${s.name}</span>\`).join('')}
-          <span>· whisper = quiet, folded below</span>
+          <span>· others = every open task below normal, folded below</span>
           <span style="color:#fbbf24;">· yellow = has due date</span>
         </div>\`;
 
@@ -1135,12 +1134,12 @@ const HTML = `<!DOCTYPE html>
         });
         if (groupTasks.length === 0) continue;
 
-        const isVisible = style.level > 1 || showQuiet || Boolean(q);
+        const isVisible = style.level > 0 || showOthers || Boolean(q);
         html += \`
           <div class="group-header">
             <span style="color:\${style.color};">\${style.glyph} \${style.name}</span>
             <span style="color:var(--wi-text-dim);font-weight:400;">\${groupTasks.length}</span>
-            \${style.level === 1 ? \`<button id="toggle-quiet-btn">\${showQuiet ? 'hide' : 'show'}</button>\` : ''}
+            \${style.level === 0 ? \`<button id="toggle-others-btn">\${showOthers ? 'hide' : 'show'}</button>\` : ''}
           </div>\`;
 
         if (isVisible) {
@@ -1161,10 +1160,10 @@ const HTML = `<!DOCTYPE html>
       }
 
       contentEl.innerHTML = html;
-      const toggleQuietBtn = document.getElementById('toggle-quiet-btn');
-      if (toggleQuietBtn) {
-        toggleQuietBtn.onclick = () => {
-          showQuiet = !showQuiet;
+      const toggleOthersBtn = document.getElementById('toggle-others-btn');
+      if (toggleOthersBtn) {
+        toggleOthersBtn.onclick = () => {
+          showOthers = !showOthers;
           render();
         };
       }
@@ -1226,7 +1225,7 @@ app.api('/api/state', async (data) => {
   const { wsRoot, activeUris } = resolveWorkspaceRoot(data?.workspaceUris);
   const convId = await resolveActiveConversationId(data?.conversationId, activeUris);
   const [kbRes, notices, journal] = await Promise.all([
-    runKb(['--json', 'next'], wsRoot),
+    runKb(['--json', 'next', '--all'], wsRoot),
     loadNotices(runKb, wsRoot),
     Promise.resolve(scanSessionJournal(convId, wsRoot)),
   ]);
@@ -1298,7 +1297,7 @@ app.api('/api/close-prompt', async (data) => {
   const { wsRoot, activeUris } = resolveWorkspaceRoot(data?.workspaceUris);
   const convId = await resolveActiveConversationId(data?.conversationId, activeUris);
   const journal = scanSessionJournal(convId, wsRoot);
-  const kbRes = await runKb(['--json', 'next'], wsRoot);
+  const kbRes = await runKb(['--json', 'next', '--all'], wsRoot);
   const today = kbRes.exitCode === 0 ? parseToday(kbRes.stdout) : null;
   const prompt = buildClosePrompt(today?.scope || basename(wsRoot), convId, journal);
   return { prompt, conversationId: convId };

@@ -36,7 +36,7 @@ const busy = atom({ plugin: 'kb', key: 'busy' } as const, null)
 const node = atom({ plugin: 'kb', key: 'node' } as const, null)
 const nodeLoading = atom({ plugin: 'kb', key: 'nodeLoading' } as const, null)
 const view = atom({ plugin: 'kb', key: 'view' } as const, null)
-const showQuiet = atom({ plugin: 'kb', key: 'showQuiet' } as const, false)
+const showOthers = atom({ plugin: 'kb', key: 'showOthers' } as const, false)
 const journal = atom({ plugin: 'kb', key: 'journal' } as const, EMPTY_JOURNAL)
 
 // kb resolves its scope from the working directory, so it runs in the session's project root
@@ -55,8 +55,8 @@ async function refreshToday($: EngineInterface): Promise<void> {
 
 async function refreshStandup($: EngineInterface): Promise<void> {
   try {
-    // `next` is today's list down to whisper; it writes no shown events
-    const run = await kb($, ['--json', 'next'])
+    // `next --all` is every open task, silent ones included; it writes no shown events
+    const run = await kb($, ['--json', 'next', '--all'])
     const parsed = run.exitCode === 0 ? parseToday(run.stdout) : null
     if (parsed === null) {
       $.ui.log(`kb: no standup: ${failure(run)}`, { to: 'debug' })
@@ -316,7 +316,7 @@ export const register: Register = on => {
             {counts.loud > 0 && <Text color="red">{`${counts.loud} loud`}</Text>}
             <Text color="yellow">{`${counts.normal} normal`}</Text>
             {counts.due > 0 && <Text bold>{`${counts.due} due`}</Text>}
-            <Text dimColor>{`${counts.quiet} quiet`}</Text>
+            <Text dimColor>{`${counts.others} others`}</Text>
             {(data?.noSummary ?? 0) > 0 && <Text color="yellow">{`${data?.noSummary} without summary`}</Text>}
             <Button key="kb-open" label="open" onPress={() => openPane($)} />
           </Box>
@@ -350,7 +350,7 @@ export const register: Register = on => {
     const waiting = (await read($, notices)) ?? []
     const armedId = await read($, armed)
     const busyId = await read($, busy)
-    const isQuietShown = await read($, showQuiet)
+    const isOthersShown = await read($, showOthers)
     if (data === null) return <Text dimColor>kb: no standup (kb on PATH? neo4j-kb.service up?)</Text>
     const counts = countByLevel(data.tasks)
     // a CSS surface draws a bordered Box as a rounded card; the terminal would spend two rows on it
@@ -435,7 +435,7 @@ export const register: Register = on => {
         <Box key="kb-head" flexDirection="row" columnGap={1} justifyContent="space-between" alignItems="center">
           <Box flexDirection="column">
             <Text bold>{`${TITLE} ${data.date}`}</Text>
-            <Text dimColor>{`${data.scope} · ${data.tasks.length - counts.quiet} on the standup · ${counts.quiet} quiet`}</Text>
+            <Text dimColor>{`${data.scope} · ${data.tasks.length - counts.others} on the standup · ${counts.others} others`}</Text>
           </Box>
           <Button key="kb-refresh" label="refresh" onPress={() => soon($, () => refreshToday($))} />
         </Box>
@@ -452,7 +452,7 @@ export const register: Register = on => {
           {LEVELS.map(style => (
             <Text color={style.color}>{`${style.glyph} ${style.name}`}</Text>
           ))}
-          <Text dimColor>kb urgency, from age or deadline; whisper = quiet, folded below</Text>
+          <Text dimColor>kb urgency, from age or deadline; others = every open task below normal, folded below</Text>
           <Text color="yellow">yellow line: has a due date (T-n = days left)</Text>
         </Box>
         {groups
@@ -462,15 +462,15 @@ export const register: Register = on => {
               <Box flexDirection="row" columnGap={1} marginTop={1} alignItems="center">
                 <Text bold color={group.style.color}>{`${group.style.glyph} ${group.style.name}`}</Text>
                 <Text dimColor>{`${group.tasks.length}`}</Text>
-                {group.style.level === 1 && (
+                {group.style.level === 0 && (
                   <Button
-                    key="kb-quiet"
-                    label={isQuietShown ? 'hide' : 'show'}
-                    onPress={() => update($, showQuiet, shown => !shown)}
+                    key="kb-others"
+                    label={isOthersShown ? 'hide' : 'show'}
+                    onPress={() => update($, showOthers, shown => !shown)}
                   />
                 )}
               </Box>
-              {(group.style.level > 1 || isQuietShown) && group.tasks.map(card)}
+              {(group.style.level > 0 || isOthersShown) && group.tasks.map(card)}
             </Box>
           ))}
       </Box>

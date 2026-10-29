@@ -53,8 +53,8 @@ from the next Claude Code session.
 
 | Piece | What it does |
 | --- | --- |
-| band above the prompt | `N notices` when any wait, then today's counts (loud, normal, due, quiet, sessions without summary; notices are not among them); `open` opens the pane |
-| pane, `/kb` | first, when any wait, the notices (`kb --json notices show`): a card each with the title, the whole body and `dismiss` (`kb notices dismiss <id>`); then `kb --json next` grouped by level, whisper folded; each task a card with `open`, `done` (asks yes/no), `snooze` (tomorrow), `+7d`, `skip` (window tasks); `open` shows the record in the same pane (body, links to follow, events) and `← today` goes back; `/kb <id>` opens a record |
+| band above the prompt | `N notices` when any wait, then today's counts (loud, normal, due, others, sessions without summary; notices are not among them); `open` opens the pane |
+| pane, `/kb` | first, when any wait, the notices (`kb --json notices show`): a card each with the title, the whole body and `dismiss` (`kb notices dismiss <id>`); then `kb --json next --all` grouped by level, the others (every open task below normal, whisper and silent) folded; each task a card with `open`, `done` (asks yes/no), `snooze` (tomorrow), `+7d`, `skip` (window tasks); `open` shows the record in the same pane (body, links to follow, events) and `← today` goes back; `/kb <id>` opens a record |
 | session row | this session in kb: `not closed` with what it touched (files from Edit/Write, commits from `git commit` output or `git log -1` after a quiet one, PR urls from `gh pr create`, kb writes from Bash, subagents included), `✓ closed`, or `closed` with `N new since closing`; `close session` sends Claude the full close as the person's words: open threads and lessons into kb, the repos checked, the journal written, the session archived when nothing is left to ask |
 | `/journal`, tool `mcp__kb__write_journal` | the journal alone: one prompt-cached request over the session's own transcript, then `kb session close --title … --body-file …` |
 
