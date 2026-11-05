@@ -213,6 +213,24 @@ async function restoreJournal($: EngineInterface): Promise<void> {
   )
 }
 
+// kb's exit for a path in no scope (`kb scope which`)
+const EXIT_NO_SCOPE = 3
+
+// The session record comes from the project's SessionStart hook, so a session whose cwd has none (the
+// kb repo, a session another session started there) reaches the close with no record. The journal
+// then opens it, in the cwd's scope or in global when the cwd is in no scope, and closes it after.
+async function closeSession($: EngineInterface, sid: string, args: readonly string[]): Promise<ProcessRunResult> {
+  const root = await $.session.root()
+  const options = { cwd: root, env: { KB_SESSION: sid }, timeoutMs: 60_000 }
+  const close = () => $.process.run(['kb', 'session', 'close', '--id', sid, ...args], options)
+  const closed = await close()
+  if (closed.exitCode === 0 || !failure(closed).includes(`no session ${sid}`)) return closed
+  const which = await $.process.run(['kb', 'scope', 'which', root], { timeoutMs: 10_000 })
+  const scope = which.exitCode === EXIT_NO_SCOPE ? ['--scope', 'global'] : []
+  const opened = await $.process.run(['kb', 'session', 'open', '--id', sid, '--source', 'startup', ...scope], options)
+  return opened.exitCode === 0 ? await close() : opened
+}
+
 // One request over this session's own transcript (prompt-cached), then `kb session close` with the body.
 async function writeJournal($: EngineInterface): Promise<string> {
   const current = await read($, journal)
@@ -227,11 +245,7 @@ async function writeJournal($: EngineInterface): Promise<string> {
     const sid = await $.session.id()
     const file = `${(await $.env.get('TMPDIR')) ?? '/tmp'}/kb-journal-${sid}.md`
     await $.fs.write(file, `${body}\n`)
-    const run = await $.process.run(['kb', 'session', 'close', '--id', sid, '--title', title, '--body-file', file], {
-      cwd: await $.session.root(),
-      env: { KB_SESSION: sid },
-      timeoutMs: 60_000,
-    })
+    const run = await closeSession($, sid, ['--title', title, '--body-file', file])
     if (run.exitCode !== 0) return `kb: session close failed: ${failure(run)}`
     await record($, j => ({ ...j, summarized: true, isClosing: false, title, mark: factCount(current) }))
     return `kb: session journal written.\n\n${title}\n\n${body}`
