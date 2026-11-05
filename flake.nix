@@ -60,6 +60,10 @@
         ]);
         kbDevEnv = editablePythonSet.mkVirtualEnv "kb-dev-env" workspace.deps.all;
 
+        # The commit this build comes from, for `kb --version` and `kb status`: pyproject's
+        # version is never bumped per release. A dirty tree gives <rev>-dirty.
+        buildRev = self.shortRev or self.dirtyShortRev or "unknown";
+
         # kb-setup writes this exact store path into the systemd unit, and kb
         # calls its neo4j-admin for backup/restore. systemctl is deliberately not
         # on the wrapper PATH: it must be the host's.
@@ -73,6 +77,7 @@
             for bin in kb kb-setup; do
               makeWrapper ${kbEnv}/bin/$bin $out/bin/$bin \
                 --set KB_NEO4J_PACKAGE ${neo4j} \
+                --set KB_BUILD_REV ${buildRev} \
                 --set KB_PLUGIN_DIR $out/share/kb/claude-plugin \
                 --set KB_ANTIGRAVITY_PLUGIN_DIR $out/share/kb/antigravity-plugin
             done
