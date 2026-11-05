@@ -60,6 +60,21 @@ def kb_version() -> str:
         return "0+unknown"
 
 
+def build_rev() -> str | None:
+    """The commit the installed kb was built from (``KB_BUILD_REV``, set by the flake's wrapper).
+
+    pyproject's version is never bumped per release, so this is what tells two builds apart; a
+    dirty tree gives ``<rev>-dirty``. None in the dev shell, where kb runs the working tree.
+    """
+    return os.environ.get("KB_BUILD_REV") or None
+
+
+def version_text() -> str:
+    """``0.1.0 (d37ecb6)``: the version, then the build's commit when the wrapper names one."""
+    rev = build_rev()
+    return f"{kb_version()} ({rev})" if rev else kb_version()
+
+
 @dataclass
 class App:
     """Per-invocation state shared by the commands: --json, config, runner, readiness waiter."""
@@ -170,7 +185,7 @@ def cli_errors() -> Iterator[None]:
 
 
 @click.group(help="kb: personal knowledge graph and todo on Neo4j.")
-@click.version_option(kb_version(), prog_name="kb")
+@click.version_option(version_text(), prog_name="kb")
 @click.option("--json", "as_json", is_flag=True, help="Structured output as JSON where available.")
 @click.pass_context
 def main(ctx: click.Context, as_json: bool) -> None:
@@ -213,6 +228,7 @@ def status(app: App) -> None:
         "unit_package": str(unit_pkg) if unit_pkg else None,
         "upgrade_pending": upgrade_pending,
         "kb": kb_version(),
+        "kb_rev": build_rev(),
     }
     if reachable:
         _probe_schema(app, info)
@@ -222,7 +238,7 @@ def status(app: App) -> None:
         f"schema:       {_schema_line(info)}",
         f"counter:      {info['counter']}",
         f"neo4j:        {info['neo4j']}",
-        f"kb:           {info['kb']}",
+        f"kb:           {version_text()}",
     ]
     if upgrade_pending:
         lines.append(

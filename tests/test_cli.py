@@ -1,13 +1,14 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 from neo4j import Driver
 
-from kb.cli import App, main, parse_params
+from kb.cli import App, kb_version, main, parse_params, version_text
 from kb.db import bootstrap_schema
 from kb.paths import UNIT_NAME, neo4j_version
 from kb.runner import Call, RecordingRunner
@@ -94,6 +95,34 @@ def test_status_ok_against_running_db(driver: Driver, tmp_path: Path, fake_syste
     assert info["package"] == info["unit_package"] == os.environ["KB_NEO4J_PACKAGE"]
     assert info["upgrade_pending"] is False
     assert info["kb"]
+
+
+@pytest.mark.usefixtures("cli_env")
+def test_status_names_the_build_commit(
+    tmp_path: Path, fake_systemctl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = App(runner=RecordingRunner(fake_systemctl("active")), home=tmp_path)
+    monkeypatch.setenv("KB_BUILD_REV", "d37ecb6-dirty")
+    text = CliRunner().invoke(main, ["status"], obj=app)
+    assert f"kb:           {kb_version()} (d37ecb6-dirty)" in text.output
+    info = json.loads(CliRunner().invoke(main, ["--json", "status"], obj=app).output)
+    assert (info["kb"], info["kb_rev"]) == (kb_version(), "d37ecb6-dirty")
+
+    # the dev shell sets no rev: the version alone
+    monkeypatch.delenv("KB_BUILD_REV")
+    assert version_text() == kb_version()
+    info = json.loads(CliRunner().invoke(main, ["--json", "status"], obj=app).output)
+    assert info["kb_rev"] is None
+
+
+def test_version_flag_prints_the_build_commit(tmp_path: Path) -> None:
+    # --version is fixed when the module loads, so it is read from a fresh process
+    env = {**os.environ, "KB_BUILD_REV": "abc1234"}
+    code = "from kb.cli import main; main(['--version'])"
+    ran = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=False
+    )
+    assert ran.stdout.strip() == f"kb, version {kb_version()} (abc1234)"
 
 
 @pytest.mark.usefixtures("cli_env")

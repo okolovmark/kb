@@ -65,6 +65,8 @@ function engine(
   submitted: Submitted[] = [],
   // the notices kb holds: `notices show` prints them, `notices dismiss` takes one out
   waiting: KbNotice[] = [],
+  // kb's session records and the root's scope (null: in no scope); without it every kb call succeeds
+  sessions?: { ids: Set<string>; scope: string | null },
 ): MockClock {
   mock.env(on, { TMPDIR: '/t' })
   mock.store(on)
@@ -98,6 +100,17 @@ function engine(
   }))
   on('process.run', (_$, e) => {
     runs.push([...e.argv])
+    const ran = (exitCode: number, stdout: string, stderr: string) => ({
+      value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
+    })
+    if (sessions !== undefined && e.argv[0] === 'kb') {
+      const [, verb, sub, , id = ''] = e.argv
+      if (verb === 'scope' && sub === 'which') {
+        return sessions.scope === null ? ran(3, '', `${e.argv[3]} is in no scope\n`) : ran(0, `${sessions.scope}\n`, '')
+      }
+      if (verb === 'session' && sub === 'open') sessions.ids.add(id)
+      if (verb === 'session' && sub === 'close' && !sessions.ids.has(id)) return ran(1, '', `Error: no session ${id}\n`)
+    }
     if (e.argv[1] === 'notices' && e.argv[2] === 'dismiss') {
       const at = waiting.findIndex(notice => String(notice.id) === e.argv[3])
       if (at >= 0) waiting.splice(at, 1)
@@ -333,6 +346,37 @@ test('close session asks Claude for the full close; the row tracks closed and wh
   expect(await band.find({ text: '1 new since closing' })).toBeDefined()
   expect(await band.find({ key: 'kb-close' })).toBeDefined()
   await band.unmount()
+})
+
+const JOURNAL_CLOSE = ['kb', 'session', 'close', '--id', SID, '--title', 'Mods for kb', '--body-file', `/t/kb-journal-${SID}.md`]
+
+test('write_journal opens the record no hook opened, in global for a cwd in no scope, then closes it', async ($, on) => {
+  const runs: string[][] = []
+  const sessions = { ids: new Set<string>(), scope: null }
+  engine(on, runs, [], { list: [], calls: [] }, [], [], sessions)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await $.tool.call({ tool: 'mcp__kb__write_journal' })
+  expect(runs.filter(argv => argv[1] === 'session')).toEqual([
+    JOURNAL_CLOSE,
+    ['kb', 'session', 'open', '--id', SID, '--source', 'startup', '--scope', 'global'],
+    JOURNAL_CLOSE,
+  ])
+  expect(sessions.ids.has(SID)).toBe(true)
+  expect(await band.find({ text: '✓ closed' })).toBeDefined()
+  await band.unmount()
+})
+
+test("write_journal opens a missing record in the cwd's own scope", async ($, on) => {
+  const runs: string[][] = []
+  engine(on, runs, [], { list: [], calls: [] }, [], [], { ids: new Set(), scope: 'proj' })
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__kb__write_journal' })
+  expect(runs.filter(argv => argv[1] === 'session')).toEqual([
+    JOURNAL_CLOSE,
+    ['kb', 'session', 'open', '--id', SID, '--source', 'startup'],
+    JOURNAL_CLOSE,
+  ])
 })
 
 test('open shows the record in the same pane; the legend names the circles', async ($, on) => {

@@ -63,7 +63,9 @@ claude-plugin`.
 
 ## Checking on it
 
-`kb status` prints the unit state, bolt, the schema, the counter and the versions. It exits 1 when
+`kb status` prints the unit state, bolt, the schema, the counter and the versions; the kb line,
+like `kb --version`, names the commit the installed build comes from (`0.1.0 (d37ecb6)`,
+`kb_rev` under `--json`), which the flake's wrapper sets as `KB_BUILD_REV`. It exits 1 when
 the unit is not active, bolt is unreachable, the schema is missing a constraint or index, the
 full-text index has an older definition, or the unit runs an older neo4j than the installed
 package.
