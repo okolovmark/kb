@@ -13,7 +13,7 @@ import {
   writesSummary,
 } from '../hooks/journal'
 import { parseNode } from '../hooks/node'
-import { noticesLabel, parseNotices, parseToday, plusDays } from '../hooks/today'
+import { noticesLabel, parseNotices, parseToday, plusDays, projectTasks } from '../hooks/today'
 import type { KbNotice } from '../types'
 
 const ROOT = '/p'
@@ -28,6 +28,19 @@ const TODAY = JSON.stringify({
     { id: 282, level: 2, name: 'normal', reason: 'decide (T+0)', title: 'payment terms', scope: 'proj', sched: 'soft', due: '2026-10-07' },
     { id: 742, level: 1, name: 'whisper', reason: '9 working days', title: 'estimate seed', scope: 'proj', sched: 'age', due: null },
     { id: 760, level: 0, name: 'silent', reason: '2 working days', title: 'fresh thread', scope: 'proj', sched: 'age', due: null },
+    // the cwd view carries the global tasks too
+    { id: 1207, level: 0, name: 'silent', reason: 'T-21', title: 'consolidate', scope: 'global', sched: 'soft', due: '2026-10-28' },
+  ],
+})
+// `kb --json next --all --scope personal`: the personal tasks and the global ones
+const PERSONAL = JSON.stringify({
+  date: '2026-10-07',
+  scope: 'personal',
+  quiet: 0,
+  no_summary: [],
+  tasks: [
+    { id: 311, level: 2, name: 'normal', reason: 'T-2', title: 'renew passport', scope: 'personal', sched: 'soft', due: '2026-10-09' },
+    { id: 1207, level: 0, name: 'silent', reason: 'T-21', title: 'consolidate', scope: 'global', sched: 'soft', due: '2026-10-28' },
   ],
 })
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -125,7 +138,9 @@ function engine(
             ? SHOW
             : e.argv[2] === 'notices'
               ? notices
-              : TODAY
+              : e.argv.includes('personal')
+                ? PERSONAL
+                : TODAY
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   // a commit with -q prints nothing; any other call answers with a commit line
@@ -164,8 +179,13 @@ describe('parsers', () => {
   })
 
   test('today, dates and the reply', async () => {
-    expect(parseToday(TODAY)?.tasks.length).toBe(4)
+    expect(parseToday(TODAY)?.tasks.length).toBe(5)
     expect(parseToday('kb: NO MEMORY')).toBe(null)
+    // the project list drops what belongs to no project, from a cwd in no scope as well
+    const view = (scope: string) => ({ id: 1, level: 0, name: 'silent', reason: '', title: scope, scope, sched: 'age', due: null })
+    const all = { date: '2026-10-07', scope: 'all', quiet: 0, noSummary: 0, tasks: ['proj', 'personal', 'other', 'global'].map(view) }
+    expect(projectTasks(all).tasks.map(task => task.scope)).toEqual(['proj', 'other'])
+    expect(projectTasks(all).scope).toBe('all')
     expect(plusDays('2026-10-28', 7)).toBe('2026-11-04')
     expect(parseJournalReply('TITLE: t\n\nIntent: i')).toEqual({ title: 't', body: 'Intent: i' })
     expect(parseNode(SHOW)?.links[0]?.id).toBe(592)
@@ -224,6 +244,45 @@ test('the band counts the standup; done asks before it closes', async ($, on) =>
   await clock.advance(0)
   expect(runs).toContainEqual(['kb', 'snooze', '282', '2026-10-14'])
   await pane.unmount()
+})
+
+test('the band opens two lists: the project, and personal with the global tasks', async ($, on) => {
+  const runs: string[][] = []
+  engine(on, runs)
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  expect(runs).toContainEqual(['kb', '--json', 'next', '--all'])
+  expect(runs).toContainEqual(['kb', '--json', 'next', '--all', '--scope', 'personal'])
+
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // the counts are the project's own: the cwd view's global task, silent with a due date, is in neither
+  expect(await band.find({ text: '2 others' })).toBeDefined()
+  expect(await band.find({ text: '1 due' })).toBeDefined()
+  expect((await band.find({ key: 'kb-open' }))?.props.label).toBe('project')
+  expect((await band.find({ key: 'kb-open-personal' }))?.props.label).toBe('personal + global (2)')
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pane.press({ key: 'kb-others' })
+  expect(await pane.find({ text: 'proj · 2 on the standup · 2 others' })).toBeDefined()
+  expect(await pane.find({ key: 'task-760' })).toBeDefined()
+  expect(await pane.find({ key: 'task-1207' })).toBeUndefined()
+
+  await band.press({ key: 'kb-open-personal' })
+  expect(await pane.find({ text: 'personal + global · 1 on the standup · 1 others' })).toBeDefined()
+  expect(await pane.find({ key: 'task-311' })).toBeDefined()
+  expect(await pane.find({ key: 'task-1207' })).toBeDefined()
+  expect(await pane.find({ key: 'task-207' })).toBeUndefined()
+
+  await band.press({ key: 'kb-open' })
+  expect(await pane.find({ key: 'task-207' })).toBeDefined()
+  expect(await pane.find({ key: 'task-311' })).toBeUndefined()
+
+  // the pane names the other list and switches to it by itself
+  expect((await pane.find({ key: 'kb-switch' }))?.props.label).toBe('→ personal + global')
+  await pane.press({ key: 'kb-switch' })
+  expect(await pane.find({ key: 'task-311' })).toBeDefined()
+  expect((await pane.find({ key: 'kb-switch' }))?.props.label).toBe('→ project')
+  await pane.unmount()
+  await band.unmount()
 })
 
 test('notices sit above the standup, a card each with the whole body', async ($, on) => {

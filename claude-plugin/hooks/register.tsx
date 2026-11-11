@@ -15,11 +15,28 @@ import {
   sinceSummary,
 } from './journal'
 import { parseNode } from './node'
-import { LEVELS, countByLevel, levelStyle, noticesLabel, parseNotices, parseToday, plusDays } from './today'
+import {
+  LEVELS,
+  countByLevel,
+  levelStyle,
+  noticesLabel,
+  parseNotices,
+  parseToday,
+  plusDays,
+  projectTasks,
+} from './today'
 
 const PANE = 'kb-today'
 // the band row's and the pane's name: it lists tasks alone, not the notes and sessions kb also holds
 const TITLE = 'my todo'
+// The two lists, a band button each: the cwd scope's own tasks, and kb's personal view, which carries
+// the global tasks. `args` go after `kb --json next --all`.
+const LISTS = {
+  project: { label: 'project', args: [] },
+  personal: { label: 'personal + global', args: ['--scope', 'personal'] },
+} as const
+type ListId = keyof typeof LISTS
+const LIST_IDS = ['project', 'personal'] as const
 // the notices block's header and the band's count of it
 const NOTICE = { glyph: '✉', color: 'suggestion' } as const
 const REFRESH_MS = 5 * 60_000
@@ -30,6 +47,8 @@ type Verb = 'done' | 'snooze' | 'week' | 'skip'
 type Target = { id: number; sched: string }
 
 const today = atom({ plugin: 'kb', key: 'today' } as const, null)
+const personal = atom({ plugin: 'kb', key: 'personal' } as const, null)
+const list = atom({ plugin: 'kb', key: 'list' } as const, 'project')
 const notices = atom({ plugin: 'kb', key: 'notices' } as const, null)
 const armed = atom({ plugin: 'kb', key: 'armed' } as const, null)
 const busy = atom({ plugin: 'kb', key: 'busy' } as const, null)
@@ -54,17 +73,22 @@ async function refreshToday($: EngineInterface): Promise<void> {
 }
 
 async function refreshStandup($: EngineInterface): Promise<void> {
+  await Promise.all(LIST_IDS.map(id => refreshList($, id)))
+}
+
+async function refreshList($: EngineInterface, id: ListId): Promise<void> {
   try {
     // `next --all` is every open task, silent ones included; it writes no shown events
-    const run = await kb($, ['--json', 'next', '--all'])
+    const run = await kb($, ['--json', 'next', '--all', ...LISTS[id].args])
     const parsed = run.exitCode === 0 ? parseToday(run.stdout) : null
     if (parsed === null) {
-      $.ui.log(`kb: no standup: ${failure(run)}`, { to: 'debug' })
+      $.ui.log(`kb: no ${id} list: ${failure(run)}`, { to: 'debug' })
       return
     }
-    await update($, today, () => parsed)
+    if (id === 'project') await update($, today, () => projectTasks(parsed))
+    else await update($, personal, () => parsed)
   } catch (error) {
-    $.ui.log(`kb: no standup: ${String(error)}`, { to: 'debug' })
+    $.ui.log(`kb: no ${id} list: ${String(error)}`, { to: 'debug' })
   }
 }
 
@@ -105,8 +129,9 @@ async function showPane($: EngineInterface, id: string, title: string): Promise<
   await $.ui.open({ id, title })
 }
 
-// the band's open and /kb: the pane in front, on the list
-async function openPane($: EngineInterface): Promise<void> {
+// a band button and /kb: the pane in front, on that list
+async function openPane($: EngineInterface, id: ListId): Promise<void> {
+  await update($, list, () => id)
   await update($, view, () => null)
   await showPane($, PANE, TITLE)
 }
@@ -273,8 +298,15 @@ export const register: Register = on => {
     })
     await restoreJournal($)
     await refreshToday($)
-    const loaded = await read($, today)
-    if (loaded !== null && countByLevel(loaded.tasks).loud > 0) void openPane($)
+    // a loud task opens the pane on the list that holds it, the project's first
+    const lists = { project: await read($, today), personal: await read($, personal) }
+    for (const id of LIST_IDS) {
+      const loaded = lists[id]
+      if (loaded !== null && countByLevel(loaded.tasks).loud > 0) {
+        void openPane($, id)
+        break
+      }
+    }
     $.clock.every(REFRESH_MS, () => void refreshToday($))
     return started
   })
@@ -287,7 +319,7 @@ export const register: Register = on => {
       return { text: `kb: [${id}] opened.` }
     }
     await refreshToday($)
-    await openPane($)
+    await openPane($, 'project')
     return { text: 'kb: standup pane opened.' }
   })
 
@@ -316,8 +348,10 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return below
     const { Box, Button, Text } = $.ui.resolve(e)
     const data = await read($, today)
+    const own = await read($, personal)
     const waiting = (await read($, notices))?.length ?? 0
     const j = await read($, journal)
+    // the counts are the project list's; the personal button carries its own
     const counts = data === null ? null : countByLevel(data.tasks)
 
     return (
@@ -332,7 +366,14 @@ export const register: Register = on => {
             {counts.due > 0 && <Text bold>{`${counts.due} due`}</Text>}
             <Text dimColor>{`${counts.others} others`}</Text>
             {(data?.noSummary ?? 0) > 0 && <Text color="yellow">{`${data?.noSummary} without summary`}</Text>}
-            <Button key="kb-open" label="open" onPress={() => openPane($)} />
+            <Button key="kb-open" label={LISTS.project.label} onPress={() => openPane($, 'project')} />
+            {own !== null && (
+              <Button
+                key="kb-open-personal"
+                label={`${LISTS.personal.label} (${own.tasks.length})`}
+                onPress={() => openPane($, 'personal')}
+              />
+            )}
           </Box>
         )}
         <Box key="kb-session-row" flexDirection="row" columnGap={1} alignItems="center">
@@ -360,7 +401,10 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if ((await read($, view)) !== null) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const data = await read($, today)
+    const listId = await read($, list)
+    const otherId: ListId = listId === 'project' ? 'personal' : 'project'
+    const lists = { project: await read($, today), personal: await read($, personal) }
+    const data = lists[listId]
     const waiting = (await read($, notices)) ?? []
     const armedId = await read($, armed)
     const busyId = await read($, busy)
@@ -449,9 +493,12 @@ export const register: Register = on => {
         <Box key="kb-head" flexDirection="row" columnGap={1} justifyContent="space-between" alignItems="center">
           <Box flexDirection="column">
             <Text bold>{`${TITLE} ${data.date}`}</Text>
-            <Text dimColor>{`${data.scope} · ${data.tasks.length - counts.others} on the standup · ${counts.others} others`}</Text>
+            <Text dimColor>{`${listId === 'project' ? data.scope : LISTS.personal.label} · ${data.tasks.length - counts.others} on the standup · ${counts.others} others`}</Text>
           </Box>
-          <Button key="kb-refresh" label="refresh" onPress={() => soon($, () => refreshToday($))} />
+          <Box flexDirection="row" columnGap={1} alignItems="center">
+            <Button key="kb-switch" label={`→ ${LISTS[otherId].label}`} onPress={() => update($, list, () => otherId)} />
+            <Button key="kb-refresh" label="refresh" onPress={() => soon($, () => refreshToday($))} />
+          </Box>
         </Box>
         {waiting.length > 0 && (
           <Box key="kb-notices" flexDirection="column" rowGap={1}>

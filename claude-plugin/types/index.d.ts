@@ -61,7 +61,12 @@ export type Journal = {
 declare module 'claude-code' {
   interface PluginState {
     kb: {
+      // the project list: the cwd view's tasks less the personal and global ones; null until kb answered
       today: KbToday | null
+      // the personal list: kb's personal view, which carries the global tasks; null until kb answered
+      personal: KbToday | null
+      // which of the two lists the pane shows
+      list: 'project' | 'personal'
       // the notices waiting for a dismiss, drawn above the standup; null until kb answered
       notices: KbNotice[] | null
       // the task whose `done` waits for a yes, and the task (or notice) whose command runs

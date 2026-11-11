@@ -19,6 +19,15 @@ export function parseToday(stdout: string): KbToday | null {
   }
 }
 
+// the scopes that belong to no project: the personal list holds their tasks
+const OWN_SCOPES = ['personal', 'global']
+
+// The cwd view carries the global tasks beside the project's, and from a cwd in no scope the tasks of
+// every scope: the project list keeps the projects' own, the personal list has the rest
+export function projectTasks(data: KbToday): KbToday {
+  return { ...data, tasks: data.tasks.filter(task => !OWN_SCOPES.includes(task.scope)) }
+}
+
 // `kb --json notices show`; null when the output is not the notices list
 export function parseNotices(stdout: string): KbNotice[] | null {
   let raw: unknown
