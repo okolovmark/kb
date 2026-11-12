@@ -47,7 +47,15 @@ const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, c
 const BAND = {
   plugin: 'kb',
   component: 'AbovePrompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+  props: {
+    hasSurvey: false,
+    isCollapsed: false,
+    isWorking: false,
+    maxRows: 10,
+    bodyColumns: 120,
+    scroll: { offset: 0, bodyRows: 9 },
+    view: {},
+  },
 } as const
 const PANE = {
   plugin: 'kb',
