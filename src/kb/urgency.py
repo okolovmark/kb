@@ -2,7 +2,7 @@
 
 import datetime as dt
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from dateutil.rrule import rrule, rrulestr
@@ -290,12 +290,26 @@ def day_fit(task: Record, today: dt.date, cfg: Config, lvl: int, reason: str) ->
     return lvl, reason
 
 
+def blocked(lvl: int, reason: str, blocked_by: Sequence[int]) -> tuple[int, str]:
+    """Silent while an open task blocks it, like a snooze: the scream of a hard deadline that
+    has come stays (a snooze cannot jump past it either)."""
+    if not blocked_by or lvl == SCREAM:
+        return lvl, reason
+    return SILENT, "blocked by " + ", ".join(f"[{i}]" for i in blocked_by)
+
+
 def level(
-    task: Record, today: dt.date, cfg: Config, events: Iterable[Event] = ()
+    task: Record,
+    today: dt.date,
+    cfg: Config,
+    events: Iterable[Event] = (),
+    *,
+    blocked_by: Sequence[int] = (),
 ) -> tuple[int, str]:
-    """``(level 0..4, reason)`` for *task* on *today*."""
+    """``(level 0..4, reason)`` for *task* on *today*; *blocked_by* are the ids of the open
+    tasks that block it."""
     events = list(events)
-    lvl, reason = raw_level(task, today, cfg, events)
+    lvl, reason = blocked(*raw_level(task, today, cfg, events), blocked_by)
     return day_fit(task, today, cfg, lvl, reason)
 
 
@@ -328,7 +342,14 @@ def schedule_line(task: Record) -> str:
     return " ".join(parts)
 
 
-def explain(task: Record, today: dt.date, cfg: Config, events: Iterable[Event] = ()) -> list[str]:
+def explain(
+    task: Record,
+    today: dt.date,
+    cfg: Config,
+    events: Iterable[Event] = (),
+    *,
+    blocked_by: Sequence[int] = (),
+) -> list[str]:
     """The level computation spelled out for ``kb why``."""
     events = list(events)
     sched = task.sched or "age"
@@ -367,7 +388,9 @@ def explain(task: Record, today: dt.date, cfg: Config, events: Iterable[Event] =
         lines.append(f"snooze: until {task.snoozed_until} ({state})")
     else:
         lines.append("snooze: none")
-    raw_lvl, raw_reason = raw_level(task, today, cfg, events)
+    if blocked_by:
+        lines.append("blocked by: " + ", ".join(f"[{i}]" for i in blocked_by))
+    raw_lvl, raw_reason = blocked(*raw_level(task, today, cfg, events), blocked_by)
     lines.append(f"before day fit: {describe(raw_lvl, raw_reason)}")
     lvl, reason = day_fit(task, today, cfg, raw_lvl, raw_reason)
     fit = "fits" if lvl == raw_lvl else f"lowered from L{raw_lvl}"
@@ -392,8 +415,13 @@ def _window_text(window: Window | None) -> str:
 
 
 def as_json(
-    task: Record, today: dt.date, cfg: Config, events: Iterable[Event] = ()
+    task: Record,
+    today: dt.date,
+    cfg: Config,
+    events: Iterable[Event] = (),
+    *,
+    blocked_by: Sequence[int] = (),
 ) -> dict[str, Any]:
     """Level, name and reason as a dict."""
-    lvl, reason = level(task, today, cfg, events)
+    lvl, reason = level(task, today, cfg, events, blocked_by=blocked_by)
     return {"level": lvl, "name": LEVEL_NAMES[lvl], "reason": reason}

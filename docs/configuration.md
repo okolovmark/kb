@@ -138,8 +138,32 @@ kb sync odoo
 
 `kb sync odoo` is silent when the source is disabled. It logs in over JSON-RPC (`common.login`;
 with `assignee_login` set a `res.users` `search_read` on that login gives the uid, else the RPC
-user's own; then `object.execute_kw` on `project.task` `search_read` with
-`[["user_ids","in",[uid]],["is_closed","=",false]]` plus `project_id` when set).
+user's own; then `object.execute_kw` on `project.task`: `fields_get` on the optional fields,
+`search_read` with `[["user_ids","in",[uid]],["is_closed","=",false]]` plus `project_id` when
+set, and where the task has `question_ids`, a `search_read` of `project.task.question` rows in
+state `open` for those tasks).
+
+Every Odoo gives `id`, `name`, `stage_id`, `date_assign`, `date_deadline` and `create_date`. The
+optional fields are read only where `fields_get` lists them, since a `search_read` naming a field
+the model lacks fails as a whole; an Odoo without them syncs as before. `parent_id`,
+`depend_on_ids` and `planned_hours` are fields of the core project app (Odoo 16), so any Odoo
+brings links and estimates; the rest come with OCA project_key and an AI-driven project module:
+
+| Odoo field | On the kb record |
+| --- | --- |
+| `key` (OCA project_key) | the key in the title and `external_id`; else the id |
+| `module_names` (technical names, `, `-separated) | an area tag per module whose name is an area of the scope's vocabulary; a module without one is skipped, never added |
+| `task_type` | `bug` and `feature` become the type tags of the same name; the other types have none |
+| `parent_id` | `PART_OF` from the task to its parent |
+| `depend_on_ids` (blocked by) | `BLOCKS` from each blocker to the task |
+| `planned_hours` | `estimate`, hours; none at 0 |
+| `brief` (a computed Markdown text) | `brief`, shown by `kb show` and searched by `kb search` |
+| `question_ids` (presence only) | `open_questions`: the task's question rows in state `open` |
+
+`kb sync odoo --dry-run` runs the whole sync in a transaction it rolls back and prints what it
+would do, record by record: `new <title>: <what it arrives with>`, `[id] <key>: <change>; ...`,
+`[id] <key>: closed in Odoo` (`dry_run: true` and `changes` under `--json`). It writes nothing, a
+failure included.
 
 A row matches every existing Task with `source = odoo` whose `external_id` is its `key` or its
 numeric id (a migrated `[odoo:NNN]` item; several items may point at one ticket); each gets the
@@ -147,9 +171,23 @@ update and its `external_id` normalised to the key. A new row becomes a Task: ti
 `<key> <name>` (cut to 120 chars), body = the form URL (written once, never again), `stage`, `soft`
 schedule with `due = date_deadline` when set (else `age`), `anchor = date_assign` (fallback
 `create_date`, both read as UTC and turned into a kb-timezone date), `days = work`. On later runs
-only `sched`, `due`, `anchor` and `stage` are refreshed, and the title only on records the sync
-itself created (`origin = odoo-sync`) and nobody edited: a migrated, promoted, hand-added or edited
-record keeps its title forever.
+only `sched`, `due`, `anchor`, `stage`, the tags from modules and type, `brief`, `estimate` and
+`open_questions` are refreshed, and the title only on records the sync itself created
+(`origin = odoo-sync`) and nobody edited: a migrated, promoted, hand-added or edited record keeps
+its title forever, and its body is the user's (the brief lives beside it).
+
+Tags: the sync adds the tags its row maps to and remembers in `odoo_tags` the ones it added; a
+tag in `odoo_tags` Odoo no longer names is taken away. A tag added by hand is never taken away,
+even when Odoo named it too, and one the sync added and the user took off comes back while Odoo
+names it.
+
+Links: the parent and the blockers are drawn only between tasks of the result (my open tasks): a
+blocker assigned to someone else, or closed, has no record to link. The edges carry
+`origin: odoo-sync`; one is removed when Odoo drops the link while both tasks are still in the
+result. An edge to a task gone from the result stays (the sync cannot tell a dropped link from a
+closed task), and one drawn by hand is never touched. A task an open task blocks is silent
+([model.md](model.md#schedules-and-urgency)), so `kb today` and `kb next` leave it out until its
+blockers are done.
 
 Every matched or created record gets `synced_at`; a record with `synced_at` that vanishes from the
 result gets a `done` event `closed in Odoo`. Odoo-sourced records the sync has never seen

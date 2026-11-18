@@ -105,13 +105,32 @@ def _hits(driver: Driver, query: str) -> list[int]:
     return [r["id"] for r in records]
 
 
-def test_full_text_index_covers_the_summary_with_the_default_analyzer(driver: Driver) -> None:
+def test_full_text_index_covers_summary_and_brief_with_the_default_analyzer(
+    driver: Driver,
+) -> None:
     bootstrap_schema(driver)
     assert fulltext_definitions(driver)["record_text"] == (
         ["Record"],
-        ["title", "summary", "body"],
+        ["title", "summary", "body", "brief"],
         "standard-no-stop-words",
     )
+    assert stale_indexes(driver) == []
+
+
+def test_the_index_without_the_brief_is_stale(driver: Driver) -> None:
+    """The definition of the release before the synced brief: kb-setup rebuilds it."""
+    bootstrap_schema(driver)
+    driver.execute_query("DROP INDEX record_text", database_="neo4j")
+    driver.execute_query(
+        "CREATE FULLTEXT INDEX record_text FOR (r:Record) ON EACH [r.title, r.summary, r.body] "
+        "OPTIONS {indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words'}}",
+        database_="neo4j",
+    )
+    try:
+        assert stale_indexes(driver) == ["record_text"]
+        assert bootstrap_schema(driver) == ["record_text"]
+    finally:
+        bootstrap_schema(driver)
     assert stale_indexes(driver) == []
 
 
@@ -146,7 +165,8 @@ def test_another_analyzer_is_stale_too(driver: Driver) -> None:
     bootstrap_schema(driver)
     driver.execute_query("DROP INDEX record_text", database_="neo4j")
     driver.execute_query(
-        "CREATE FULLTEXT INDEX record_text FOR (r:Record) ON EACH [r.title, r.summary, r.body] "
+        "CREATE FULLTEXT INDEX record_text FOR (r:Record) "
+        "ON EACH [r.title, r.summary, r.body, r.brief] "
         "OPTIONS {indexConfig: {`fulltext.analyzer`: 'english'}}",
         database_="neo4j",
     )

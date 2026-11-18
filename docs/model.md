@@ -16,8 +16,10 @@ for every kind but Task), `kind`, `scope` (`global`, `personal` or a `[scopes]` 
 it), `body` (markdown), `created_at`, `updated_at`, `pinned` (default true for Feedback),
 `pin_level` (`critical` | `normal` on a pinned record, absent otherwise; a record pinned before the
 levels has none and counts as normal), `tags`, `source` (`manual` | `odoo`), `external_id`,
-`journal_ref`, `archived_at`, `done_at`, and on synced tasks `stage`, `synced_at` and `origin`
-(`odoo-sync` on records the sync created).
+`journal_ref`, `archived_at`, `done_at`, and on synced tasks `stage`, `synced_at`, `origin`
+(`odoo-sync` on records the sync created) and, where the Odoo has them, `brief` (the task as
+Markdown), `estimate` (hours), `open_questions` and `odoo_tags` (the tags the sync gave the
+record, the only ones it takes away again): [configuration.md](configuration.md#odoo-source).
 
 `kb add TITLE` creates one, a task unless `--kind` says otherwise, with the scope from `--scope`,
 else the cwd inside a `[scopes]` path, else an error. Its other flags: `--body TEXT|-`,
@@ -39,12 +41,13 @@ schedule flags below, `--source odoo --external-id X`, `--journal-ref R` and `--
   with their `before` and `after` values; an unchanged state writes nothing and prints
   `already pinned <level>` / `already unpinned` (`written: false` under `--json`, which also
   carries the `before` state).
-- `kb show REF` — header (`pinned: critical | normal | no`), the summary when set, schedule, `urgency: L<n> <name> — <reason>`, body,
-  links, last 10 events. On a session it adds the state line (`session: <id>  opened: …
+- `kb show REF` — header (`pinned: critical | normal | no`), the summary when set, schedule, `urgency: L<n> <name> — <reason>`,
+  on a synced task `estimate: <h>h  open questions: <n>` (`-` for none), body, the synced task's
+  brief under `brief:`, links, last 10 events. On a session it adds the state line (`session: <id>  opened: …
   open|closed: …`) and groups its `OPENED_IN` / `TOUCHED` neighbours as `created here:` /
   `touched here:`.
-- `kb search QUERY [--scope S] [--kind K] [--all] [--limit N]` — full-text over title, summary
-  and body, printing `[id] kind slug title  score`. The query is Lucene syntax; one Lucene cannot
+- `kb search QUERY [--scope S] [--kind K] [--all] [--limit N]` — full-text over title, summary,
+  body and a synced task's brief, printing `[id] kind slug title  score`. The query is Lucene syntax; one Lucene cannot
   parse (a `/`, an unbalanced quote) is searched again as plain text, with
   `kb search: not valid Lucene syntax, searched as plain text` on stderr (`plain_text: true` under
   `--json`). Archived records only with `--all`.
@@ -84,8 +87,10 @@ records of that type from any area, so a rule about migrations reaches every tas
   record's scope (exit 4, listing the valid tags); tags are lowered. Tags a record already
   carries stay, whatever they are.
 - **One area required.** `kb add` refuses a record without an area tag (exit 4), for every kind
-  but a session and outside the personal scope. Tasks synced from Odoo arrive untagged; tagging
-  one (`edit --tag` alone) does not stop its title from following Odoo.
+  but a session and outside the personal scope. A task synced from Odoo arrives with the areas
+  named like its modules and the type tag of its task type (`bug`, `feature`), and without an
+  area when none of its modules is one; tagging one (`edit --tag` alone) does not stop its title from
+  following Odoo.
 - `kb tags [--scope S]` — the vocabulary of S (default the cwd scope): the file in use, areas and
   types with how many records in the view carry each, and the tags in use outside the vocabulary.
 - `kb tags init [--scope S]` — writes a seed `.kb/tags.toml` at the project's root; an existing
@@ -193,7 +198,14 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
   (exit 1) a record that is not a `once` task, one done already or archived, and one outside the
   scope view.
 - `kb why REF` — the level computation spelled out: schedule, thresholds and their source, calendar,
-  snooze, day fit, result.
+  snooze, the blocking tasks, day fit, result.
+
+**Blocked.** A task an open task `BLOCKS` (one neither done nor archived) is silent, with the
+reason `blocked by [id], ...`, whatever its schedule says: `today` and `next` leave it out,
+`next --all` lists it. Like a snooze, it cannot silence the scream of a hard deadline that has
+come. Once every blocker is done the task's own level is back; a `window` task counts the
+windows it was blocked through as skipped, so it may come back in the backlog. Reasoning:
+[adr/0009](adr/0009-the-odoo-sync-brings-the-task-agent-layer.md).
 
 ## Events and relationships
 
@@ -205,7 +217,9 @@ per record and window, keyed on the window's last day), `snooze`, `shown`, `sync
 
 Relationships between records are a closed vocabulary: `RELATED`, `SUPERSEDES`, `BLOCKS`,
 `OPENED_IN`, `TOUCHED`, `PART_OF`, each with `created_at`. `kb link A TYPE B` and
-`kb unlink A TYPE B` manage them by hand; a type outside the vocabulary is an error. The reasoning
+`kb unlink A TYPE B` manage them by hand; a type outside the vocabulary is an error. `kb sync odoo`
+draws `PART_OF` (child to parent) and `BLOCKS` (blocker to blocked) between synced tasks, marked
+`origin: odoo-sync`, and removes only edges it marked. The reasoning
 is in [adr/0005-records-events-and-links-in-the-graph.md](adr/0005-records-events-and-links-in-the-graph.md).
 
 ## Scopes and the view

@@ -11,11 +11,21 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from kb import sync_odoo
+from kb import similar, sync_odoo
 from kb.cli import main
 from kb.config import load
 
 UID = 7
+READ_ALL = [
+    *sync_odoo.TASK_FIELDS,
+    "key",
+    "module_names",
+    "task_type",
+    "parent_id",
+    "depend_on_ids",
+    "planned_hours",
+    "brief",
+]
 
 
 @dataclass
@@ -27,7 +37,8 @@ class FakeOdoo:
     calls: list[dict[str, Any]] = field(default_factory=list)
     url: str = ""
     users: dict[str, int] = field(default_factory=lambda: {"dev": 42})
-    has_key: bool = True  # OCA project_key installed
+    missing: set[str] = field(default_factory=set)  # task fields this Odoo does not have
+    questions: list[dict[str, Any]] = field(default_factory=list)  # project.task.question rows
 
 
 def fake_server(state: FakeOdoo) -> Iterator[FakeOdoo]:
@@ -55,15 +66,29 @@ def fake_server(state: FakeOdoo) -> Iterator[FakeOdoo]:
                     login = args[0][0][2]
                     result = [{"id": state.users[login]}] if login in state.users else []
                 elif method == "fields_get":
-                    assert model == "project.task" and args == [["key"]]
-                    result = {"key": {"type": "char"}} if state.has_key else {}
-                elif "key" in kwargs["fields"] and not state.has_key:
-                    message = "Invalid field 'key' on model 'project.task'"
+                    assert model == "project.task" and args == [sync_odoo.OPTIONAL_FIELDS]
+                    assert kwargs == {"attributes": ["type"]}
+                    result = {f: {"type": "char"} for f in args[0] if f not in state.missing}
+                elif model == "project.task.question":
+                    assert method == "search_read" and kwargs == {"fields": ["task_id"]}
+                    (_f, _op, ids), wanted = args[0]
+                    assert wanted == ["state", "=", "open"]
+                    result = [
+                        {"id": n, "task_id": [q["task_id"], "a task"]}
+                        for n, q in enumerate(state.questions, 1)
+                        if q["task_id"] in ids and q["state"] == "open"
+                    ]
+                elif lacking := [f for f in kwargs["fields"] if f in state.missing]:
+                    message = f"Invalid field {lacking[0]!r} on model 'project.task'"
                     error = {"message": "Odoo Server Error", "data": {"message": message}}
                     result = None
                 else:
                     assert (model, method) == ("project.task", "search_read")
-                    result = [{k: t.get(k, False) for k in kwargs["fields"]} for t in state.tasks]
+                    fields = kwargs["fields"]
+                    result = [
+                        {k: t.get(k, [] if k == "depend_on_ids" else False) for k in fields}
+                        for t in state.tasks
+                    ]
             else:
                 error = {"message": "unknown method"}
                 result = None
@@ -172,14 +197,20 @@ def odoo_tasks(kb_env) -> dict[str, dict[str, Any]]:
 def assert_first_run(odoo: FakeOdoo, first) -> None:
     assert first.exit_code == 0, first.output
     assert first.output.strip() == "odoo: 3 open tasks, 3 new, 0 updated, 0 closed"
-    login, fields, search = odoo.calls
+    login, fields, search, questions = odoo.calls
     assert login["args"] == ["prod", "mark", "secret"]
-    assert fields["args"][3:6] == ["project.task", "fields_get", [["key"]]]
+    assert fields["args"][3:6] == ["project.task", "fields_get", [sync_odoo.OPTIONAL_FIELDS]]
     assert search["args"][3:5] == ["project.task", "search_read"]
     assert search["args"][5] == [
         [["user_ids", "in", [UID]], ["is_closed", "=", False], ["project_id", "=", 5]]
     ]
-    assert search["args"][6] == {"fields": sync_odoo.TASK_FIELDS}
+    # every optional field the Odoo has, but question_ids: the open rows are counted apart
+    assert search["args"][6] == {"fields": READ_ALL}
+    assert questions["args"][3:6] == [
+        "project.task.question",
+        "search_read",
+        [[["task_id", "in", [101, 102, 103]], ["state", "=", "open"]]],
+    ]
 
 
 def test_first_run_creates_then_second_run_closes_and_updates(kb_env, odoo: FakeOdoo) -> None:
@@ -404,7 +435,8 @@ def test_migrated_items_are_matched_by_odoo_id_not_closed(kb_env, odoo: FakeOdoo
     payload = json.loads(runner.invoke(main, ["--json", "log", "256"]).stdout)["events"][0][
         "payload"
     ]
-    assert payload == {"changed": ["external_id", "stage"]}
+    # the Odoo has question rows: the count arrives with the first sync that sees the task
+    assert payload == {"changed": ["external_id", "open_questions", "stage"]}
     odoo.tasks[0]["name"] = "renamed again in Odoo"
     runner.invoke(main, ["sync", "odoo"])
     assert odoo_tasks(kb_env)["KIO-1001"]["title"].startswith("KIO-1001 the 2,906 parts")
@@ -570,7 +602,7 @@ def test_assignee_login_resolves_the_uid_the_tasks_are_filtered_on(kb_env, odoo:
     result = runner.invoke(main, ["sync", "odoo"])
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "odoo: 3 open tasks, 3 new, 0 updated, 0 closed"
-    login, users, _fields, search = odoo.calls
+    login, users, _fields, search, _questions = odoo.calls
     assert login["method"] == "login"
     assert users["args"][3:6] == ["res.users", "search_read", [[["login", "=", "dev"]]]]
     assert users["args"][6] == {"fields": ["id"], "limit": 1}
@@ -623,16 +655,270 @@ def test_untracked_list_is_capped_and_printed_only_when_it_changes(kb_env, odoo:
 
 
 def test_odoo_without_project_key_files_tasks_under_their_id(kb_env, odoo: FakeOdoo) -> None:
-    odoo.has_key = False  # asking a keyless Odoo for "key" fails the whole search_read
+    odoo.missing = {"key"}  # asking a keyless Odoo for "key" fails the whole search_read
     configure(kb_env, odoo.url)
     result = CliRunner().invoke(main, ["sync", "odoo"])
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "odoo: 3 open tasks, 3 new, 0 updated, 0 closed"
-    search = odoo.calls[-1]
-    assert search["args"][6] == {"fields": [f for f in sync_odoo.TASK_FIELDS if f != "key"]}
+    search = odoo.calls[2]
+    assert search["args"][6] == {"fields": [f for f in READ_ALL if f != "key"]}
     tasks = odoo_tasks(kb_env)
     assert sorted(tasks) == ["101", "102", "103"]
     assert tasks["101"]["title"] == "101 First task"
+
+
+def test_an_odoo_without_the_agent_layer_syncs_as_before(kb_env, odoo: FakeOdoo) -> None:
+    """No modules, type, links, estimate, brief or question rows: the seven fields of old."""
+    odoo.missing = set(sync_odoo.OPTIONAL_FIELDS) - {"key"}
+    odoo.tasks[0].update(brief="never asked for", module_names="demo", task_type="bug")
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    result = runner.invoke(main, ["sync", "odoo"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "odoo: 3 open tasks, 3 new, 0 updated, 0 closed"
+    _login, _fields, search = odoo.calls  # no question rows asked for
+    assert search["args"][6] == {"fields": [*sync_odoo.TASK_FIELDS, "key"]}
+    first = odoo_tasks(kb_env)["KIO-1700"]
+    assert first["tags"] == []
+    for name in ("brief", "estimate", "open_questions"):
+        assert name not in first
+    again = runner.invoke(main, ["sync", "odoo"])
+    assert again.output.strip() == "odoo: 3 open tasks, 0 new, 0 updated, 0 closed"
+
+
+def kb_json(runner: CliRunner, *args: str) -> Any:
+    result = runner.invoke(main, ["--json", *args])
+    assert result.exit_code == 0, result.output
+    return json.loads(result.stdout)
+
+
+def test_modules_and_type_become_tags_that_follow_odoo(kb_env, odoo: FakeOdoo) -> None:
+    """A module with an area of the same name tags the task, one without is skipped; bug and
+    feature are the only task types with a kb type tag; tags added by hand are never removed."""
+    odoo.tasks[0].update(module_names="demo, sale_stock", task_type="bug")
+    odoo.tasks[1].update(module_names=False, task_type="improvement")
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    assert runner.invoke(main, ["sync", "odoo"]).exit_code == 0
+    tasks = odoo_tasks(kb_env)
+    first, second = tasks["KIO-1700"], tasks["KIO-1701"]
+    assert first["tags"] == ["demo", "bug"]
+    assert second["tags"] == []  # no module: no area, as before
+    context = kb_json(runner, "context", str(first["id"]), "--scope", "proj")
+    assert (context["areas"], context["types"]) == (["demo"], ["bug"])
+    # by hand: an area on the first, the module's own area on the second
+    assert runner.invoke(main, ["edit", str(first["id"]), "--tag", "tooling"]).exit_code == 0
+    assert runner.invoke(main, ["edit", str(second["id"]), "--tag", "demo"]).exit_code == 0
+    odoo.tasks[0].update(module_names="sale_stock", task_type="feature")
+    odoo.tasks[1].update(module_names="demo")  # the second has demo already, by hand
+    result = runner.invoke(main, ["sync", "odoo"])
+    assert result.output.strip() == "odoo: 3 open tasks, 0 new, 1 updated, 0 closed"
+    tasks = odoo_tasks(kb_env)
+    assert tasks["KIO-1700"]["tags"] == ["tooling", "feature"]
+    assert tasks["KIO-1701"]["tags"] == ["demo"]
+    # Odoo drops the module again: the area the user gave the task by hand stays
+    odoo.tasks[1].update(module_names=False)
+    runner.invoke(main, ["sync", "odoo"])
+    assert odoo_tasks(kb_env)["KIO-1701"]["tags"] == ["demo"]
+    # a tag from Odoo the user took off comes back: Odoo still names the module
+    runner.invoke(main, ["edit", str(first["id"]), "--untag", "feature"])
+    runner.invoke(main, ["sync", "odoo"])
+    assert odoo_tasks(kb_env)["KIO-1700"]["tags"] == ["tooling", "feature"]
+    # retagging is not authorship: the title still follows Odoo
+    odoo.tasks[0]["name"] = "First task, renamed"
+    runner.invoke(main, ["sync", "odoo"])
+    assert odoo_tasks(kb_env)["KIO-1700"]["title"] == "KIO-1700 First task, renamed"
+
+
+PARENT = {
+    "id": 201,
+    "key": "KIO-1800",
+    "name": "The parent",
+    "stage_id": [2, "To Do"],
+    "date_assign": "2026-09-01 01:00:00",
+    "date_deadline": False,
+    "create_date": "2026-09-01 01:00:00",
+}
+CHILD = dict(
+    PARENT,
+    id=202,
+    key="KIO-1801",
+    name="The child",
+    date_deadline="2026-09-15",  # T-1 on 2026-09-14: loud, unless blocked
+    parent_id=[201, "KIO-1800 The parent"],
+    depend_on_ids=[203, 999],  # 999 is not one of my open tasks: no record, no link
+)
+BLOCKER = dict(PARENT, id=203, key="KIO-1802", name="The blocker")
+
+
+def links(kb_env) -> list[tuple[str, str, str, str | None]]:
+    rows, _, _ = kb_env.driver.execute_query(
+        "MATCH (a:Record)-[l:BLOCKS|PART_OF]->(b:Record) "
+        "RETURN a.external_id AS a, type(l) AS t, b.external_id AS b, l.origin AS origin "
+        "ORDER BY a, t, b",
+        database_="neo4j",
+    )
+    return [(r["a"], r["t"], r["b"], r["origin"]) for r in rows]
+
+
+def test_parent_and_blockers_become_links_and_a_blocked_task_waits(kb_env, odoo: FakeOdoo) -> None:
+    odoo.tasks = [dict(PARENT), dict(CHILD), dict(BLOCKER)]
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    result = runner.invoke(main, ["sync", "odoo"])
+    assert result.exit_code == 0, result.output
+    assert links(kb_env) == [
+        ("KIO-1801", "PART_OF", "KIO-1800", "odoo-sync"),
+        ("KIO-1802", "BLOCKS", "KIO-1801", "odoo-sync"),
+    ]
+    tasks = odoo_tasks(kb_env)
+    child, blocker = tasks["KIO-1801"]["id"], tasks["KIO-1802"]["id"]
+    # blocked: silent, so today and next leave it out; next --all says why
+    assert "KIO-1801" not in runner.invoke(main, ["today", "--scope", "proj"]).output
+    assert "KIO-1801" not in runner.invoke(main, ["next", "--scope", "proj"]).output
+    listed = runner.invoke(main, ["next", "--all", "--scope", "proj"]).output
+    assert f"[{child}] L0 silent  KIO-1801 The child  · blocked by [{blocker}]" in listed
+    why = runner.invoke(main, ["why", str(child)]).output.splitlines()
+    assert f"blocked by: [{blocker}]" in why
+    assert why[-1] == f"result: L0 silent — blocked by [{blocker}]"
+    shown = kb_json(runner, "show", str(child))
+    assert shown["urgency"]["reason"] == f"blocked by [{blocker}]"
+    # unchanged links are not rewritten
+    again = runner.invoke(main, ["sync", "odoo"])
+    assert again.output.strip() == "odoo: 3 open tasks, 0 new, 0 updated, 0 closed"
+    # the blocker closes in Odoo: its record is done and blocks no more; the edge stays, as
+    # the sync cannot tell a dependency dropped from a blocker gone from my open tasks
+    odoo.tasks = [dict(PARENT), dict(CHILD)]
+    closed = runner.invoke(main, ["sync", "odoo"])
+    assert closed.output.strip() == "odoo: 2 open tasks, 0 new, 0 updated, 1 closed"
+    assert ("KIO-1802", "BLOCKS", "KIO-1801", "odoo-sync") in links(kb_env)
+    today = runner.invoke(main, ["today", "--scope", "proj"]).output
+    assert f"[{child}] L3 loud  KIO-1801 The child  · T-1" in today
+    # Odoo drops the parent and the dependency: the edges the sync made go, a manual one stays
+    manual = kb_json(runner, "add", "Wait for the vendor", "--scope", "proj", "--tag", "demo")
+    assert runner.invoke(main, ["link", str(manual["id"]), "BLOCKS", str(child)]).exit_code == 0
+    odoo.tasks = [dict(PARENT), dict(CHILD, parent_id=False, depend_on_ids=[]), dict(BLOCKER)]
+    result = runner.invoke(main, ["sync", "odoo"])
+    assert result.output.strip() == "odoo: 3 open tasks, 0 new, 2 updated, 0 closed"
+    assert links(kb_env) == [(None, "BLOCKS", "KIO-1801", None)]
+    log = kb_json(runner, "log", str(child))["events"][0]
+    assert log["kind"] == "synced"
+    assert log["payload"] == {
+        "changed": ["links"],
+        "links": [f"-BLOCKS <- [{blocker}]", f"-PART_OF -> [{tasks['KIO-1800']['id']}]"],
+    }
+    # the manual blocker is open: the child waits again
+    assert "KIO-1801" not in runner.invoke(main, ["today", "--scope", "proj"]).output
+
+
+def test_brief_estimate_and_open_questions_are_kept_and_refreshed(kb_env, odoo: FakeOdoo) -> None:
+    brief = "# KIO-1700 First task\n\nThe widget export loses the split delivery dates.\n"
+    odoo.tasks[0].update(brief=brief, planned_hours=6)
+    odoo.tasks[1].update(planned_hours=0)  # never estimated
+    odoo.questions = [
+        {"task_id": 101, "state": "open"},
+        {"task_id": 101, "state": "open"},
+        {"task_id": 102, "state": "answered"},
+    ]
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    assert runner.invoke(main, ["sync", "odoo"]).exit_code == 0
+    tasks = odoo_tasks(kb_env)
+    first, second = tasks["KIO-1700"], tasks["KIO-1701"]
+    assert (first["brief"], first["estimate"], first["open_questions"]) == (brief, 6.0, 2)
+    assert first["body"].endswith("/web#id=101&model=project.task&view_type=form")
+    assert "brief" not in second and "estimate" not in second
+    assert second["open_questions"] == 0
+    shown = runner.invoke(main, ["show", str(first["id"])]).output.splitlines()
+    assert "estimate: 6h  open questions: 2" in shown
+    assert shown[shown.index("brief:") + 1 :][:3] == [
+        "# KIO-1700 First task",
+        "",
+        "The widget export loses the split delivery dates.",
+    ]
+    found = kb_json(runner, "search", "split delivery", "--scope", "proj")
+    assert [r["id"] for r in found["hits"]] == [first["id"]]
+    # the body is the user's: a note appended to it stays; the brief follows Odoo
+    runner.invoke(main, ["append", str(first["id"]), "my note"])
+    runner.invoke(main, ["edit", str(first["id"]), "--title", "My own title"])
+    odoo.tasks[0].update(brief=brief + "\n## Questions\n\nWhich dates?\n", planned_hours=7.5)
+    odoo.questions[0]["state"] = "answered"
+    result = runner.invoke(main, ["sync", "odoo"])
+    assert result.output.strip() == "odoo: 3 open tasks, 0 new, 1 updated, 0 closed"
+    first = odoo_tasks(kb_env)["KIO-1700"]
+    assert first["brief"].endswith("Which dates?\n")
+    assert (first["estimate"], first["open_questions"]) == (7.5, 1)
+    assert first["title"] == "My own title"
+    assert first["body"].endswith("**2026-09-14:** my note")
+    log = kb_json(runner, "log", str(first["id"]))["events"][0]
+    assert log["payload"] == {"changed": ["brief", "estimate", "open_questions"]}
+    # the task leaves Odoo's brief field behind: the copy goes too
+    odoo.tasks[0]["brief"] = False
+    runner.invoke(main, ["sync", "odoo"])
+    assert "brief" not in odoo_tasks(kb_env)["KIO-1700"]
+
+
+def test_a_brief_does_not_rank_the_duplicate_candidates(kb_env, odoo: FakeOdoo) -> None:
+    """kb add takes Lucene's top candidates, then decides on titles and summaries: a brief full
+    of the same words must not push the closer record out of them. One candidate makes the
+    ranking visible: the brief alone would put the synced task first."""
+    title = "Widget split delivery dates"
+    odoo.tasks = [dict(TASKS[1], name=title, brief="widget split delivery dates " * 40)]
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    assert runner.invoke(main, ["sync", "odoo"]).exit_code == 0
+    args = ["add", title, "--scope", "proj", "--tag", "demo"]
+    thread = kb_json(runner, *args, "--distinct")
+    with pytest.MonkeyPatch.context() as inner:
+        inner.setattr(similar, "CANDIDATES", 1)
+        again = runner.invoke(main, args)
+    assert again.exit_code == 5, again.output
+    assert again.stderr.splitlines()[0] == f"similar: [{thread['id']}] task {title}"
+
+
+def test_dry_run_prints_what_would_change_and_writes_nothing(kb_env, odoo: FakeOdoo) -> None:
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    planned = runner.invoke(main, ["sync", "odoo", "--dry-run"])
+    assert planned.exit_code == 0, planned.output
+    assert planned.output.splitlines() == [
+        "dry run: nothing written",
+        "odoo: 3 open tasks, 3 new, 0 updated, 0 closed",
+        "new KIO-1700 First task",
+        "new KIO-1701 Second task",
+        "new 103 Keyless task",
+    ]
+    assert odoo_tasks(kb_env) == {}
+    assert meta(kb_env) is None
+    assert runner.invoke(main, ["sync", "odoo"]).exit_code == 0
+    before = odoo_tasks(kb_env)
+    stamp = meta(kb_env)["at"]
+    first = before["KIO-1700"]["id"]
+    odoo.tasks = [
+        dict(
+            TASKS[0],
+            stage_id=[4, "Review"],
+            module_names="demo",
+            task_type="feature",
+            planned_hours=3,
+            brief="# KIO-1700 First task\n",
+        ),
+        dict(TASKS[2]),
+    ]
+    odoo.questions = [{"task_id": 101, "state": "open"}]
+    planned = runner.invoke(main, ["sync", "odoo", "--dry-run"])
+    assert planned.output.splitlines() == [
+        "dry run: nothing written",
+        "odoo: 2 open tasks, 0 new, 1 updated, 1 closed",
+        f"[{first}] KIO-1700: stage In Progress -> Review; tags +demo +feature; "
+        "brief added (22 chars); estimate - -> 3h; open questions 0 -> 1",
+        f"[{before['KIO-1701']['id']}] KIO-1701: closed in Odoo",
+    ]
+    assert odoo_tasks(kb_env) == before
+    assert meta(kb_env)["at"] == stamp
+    as_json = kb_json(runner, "sync", "odoo", "--dry-run")
+    assert as_json["dry_run"] is True and as_json["updated"] == [first]
+    assert odoo_tasks(kb_env) == before
 
 
 def test_a_new_ticket_like_an_open_thread_gets_one_duplicate_hint(kb_env, odoo: FakeOdoo) -> None:
@@ -701,3 +987,36 @@ def test_tagging_a_synced_task_keeps_its_title_following_odoo(kb_env, odoo: Fake
     odoo.tasks[0]["name"] = "First task, renamed twice"
     runner.invoke(main, ["sync", "odoo"])
     assert odoo_tasks(kb_env)["KIO-1700"]["title"] == "KIO-1700 First task, renamed"
+
+
+def test_a_dry_run_names_new_records_by_key_never_by_id(kb_env, odoo: FakeOdoo) -> None:
+    """The records a dry run would create are rolled back with their ids, and the next write
+    hands those ids out again: an id printed for one could name another record by then."""
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    odoo.tasks = [dict(CHILD, parent_id=False, depend_on_ids=[])]
+    assert runner.invoke(main, ["sync", "odoo"]).exit_code == 0
+    child = odoo_tasks(kb_env)["KIO-1801"]["id"]
+    title = "Unblock the widget export"
+    thread = kb_json(runner, "add", title, "--scope", "proj", "--tag", "demo")
+    odoo.tasks = [dict(CHILD, parent_id=False, depend_on_ids=[203]), dict(BLOCKER, name=title)]
+    planned = runner.invoke(main, ["sync", "odoo", "--dry-run"])
+    assert planned.exit_code == 0, planned.output
+    assert planned.output.splitlines() == [
+        "dry run: nothing written",
+        "odoo: 2 open tasks, 1 new, 1 updated, 0 closed",
+        f"new KIO-1802 {title}",
+        f"[{child}] KIO-1801: +BLOCKS <- [new KIO-1802]",
+        f"possible duplicate: new KIO-1802 {title} ~ [{thread['id']}] {title}: "
+        f"kb promote {thread['id']} KIO-1802 before a real sync creates it",
+    ]
+    data = kb_json(runner, "sync", "odoo", "--dry-run")
+    assert data["created"] == ["KIO-1802"]
+    assert [(c["id"], c["key"], c["kind"]) for c in data["changes"]] == [
+        (None, "KIO-1802", "new"),
+        (child, "KIO-1801", "updated"),
+    ]
+    assert [(d["new"], d["old"]) for d in data["possible_duplicates"]] == [
+        ("KIO-1802", thread["id"])
+    ]
+    assert sorted(odoo_tasks(kb_env)) == ["KIO-1801"]

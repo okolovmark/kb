@@ -266,3 +266,22 @@ def test_pathological_daily_rule_does_not_hang(cfg) -> None:
 def test_created_day_is_the_kb_timezone_date(cfg) -> None:
     late = task(created_at=dt.datetime(2026, 9, 13, 20, 0, tzinfo=UTC))  # 04:00 Sep 14 Manila
     assert urgency.created_day(late, cfg) == dt.date(2026, 9, 14)
+
+
+# --- blocked ----------------------------------------------------------------------------
+
+
+def test_a_blocked_task_is_silent_but_a_hard_deadline_still_screams(cfg) -> None:
+    """Blocked by an open task: silent like a snooze, and like a snooze it cannot silence the
+    day a hard deadline falls due."""
+    loud_soft = task(sched="soft", due=DUE)
+    today = DUE - dt.timedelta(days=1)
+    assert urgency.level(loud_soft, today, cfg) == (3, "T-1")
+    assert urgency.level(loud_soft, today, cfg, blocked_by=[7, 9]) == (0, "blocked by [7], [9]")
+    hard = task(sched="hard", due=DUE)
+    assert urgency.level(hard, DUE, cfg, blocked_by=[7]) == (4, "T-0")
+    assert urgency.level(hard, today, cfg, blocked_by=[7]) == (0, "blocked by [7]")
+    lines = urgency.explain(loud_soft, today, cfg, blocked_by=[7])
+    assert "blocked by: [7]" in lines
+    assert lines[-1] == "result: L0 silent — blocked by [7]"
+    assert urgency.as_json(loud_soft, today, cfg, blocked_by=[7])["reason"] == "blocked by [7]"

@@ -122,6 +122,7 @@ snooze and sync, each one stamped with the session that wrote it.
 
 **Relationships** come from a closed vocabulary: `RELATED`, `SUPERSEDES`, `BLOCKS` and `PART_OF`,
 plus `OPENED_IN` and `TOUCHED`, which a session uses to say what it created and what it changed.
+A task an open task blocks stays silent until its blockers are done.
 
 **Tags** are closed too. An area tag names a module or subsystem and pulls context; a type tag
 (`bug`, `migration`, `data_fix`, …) says what kind of work it is and pulls the knowledge records
@@ -142,7 +143,7 @@ and wrong types are errors, so a typo is loud. The keys most people touch:
 | `scopes` | empty | project name to directory, the map behind the scope view; `kb scope add NAME` registers the current directory |
 | `calendar.country` | `PH` | whose public holidays are not working days |
 | `escalation.*` | 14/7/2 calendar days, 5/10/15 working days | when each schedule starts speaking up |
-| `sources.odoo.enabled` | `false` | pull your open tickets in as tasks |
+| `sources.odoo.enabled` | `false` | pull your open tickets in as tasks, with their areas, links, brief and estimate where the Odoo has them |
 | `neo4j.tx_log_preallocate` | `false` | `true` restores Neo4j's 256 MiB of empty space per transaction log |
 
 Every key, the Odoo source and the per-record overrides are in
