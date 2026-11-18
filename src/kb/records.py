@@ -105,6 +105,12 @@ class Record:
     stage: str | None = None
     synced_at: dt.datetime | None = None
     origin: str | None = None
+    # what the Odoo sync keeps of the task: its brief, estimate (hours), open question rows,
+    # and the tags it gave the record (the ones it may take away again)
+    brief: str | None = None
+    estimate: float | None = None
+    open_questions: int | None = None
+    odoo_tags: list[str] = field(default_factory=list)
     session_id: str | None = None
     opened_at: dt.datetime | None = None
     closed_at: dt.datetime | None = None
@@ -421,7 +427,7 @@ def search(
     include_archived: bool,
     limit: int,
 ) -> list[tuple[Record, float]]:
-    """Full-text query, raw Lucene syntax, over title, summary and body (``record_text``)."""
+    """Full-text query, raw Lucene syntax, over title, summary, body and brief (``record_text``)."""
     rows = tx.run(
         f"CALL db.index.fulltext.queryNodes('{FULLTEXT_INDEX}', $q) YIELD node, score "
         "WHERE ($scopes IS NULL OR node.scope IN $scopes) "
@@ -470,6 +476,21 @@ def tag_counts(tx: ManagedTransaction, scopes: list[str] | None) -> dict[str, in
         scopes=scopes,
     )
     return {row["tag"]: row["n"] for row in rows}
+
+
+def blockers(tx: ManagedTransaction, ids: list[int]) -> dict[int, list[int]]:
+    """``{record id: [ids of the open tasks that BLOCK it]}`` for the records of *ids* that
+    have any; a done or archived task blocks nothing."""
+    rows = tx.run(
+        "MATCH (b:Record:Task)-[:BLOCKS]->(t:Record) WHERE t.id IN $ids "
+        "AND b.done_at IS NULL AND b.archived_at IS NULL "
+        "RETURN t.id AS id, b.id AS blocker ORDER BY id, blocker",
+        ids=ids,
+    )
+    out: dict[int, list[int]] = {}
+    for row in rows:
+        out.setdefault(row["id"], []).append(row["blocker"])
+    return out
 
 
 def open_tasks(tx: ManagedTransaction, scopes: list[str] | None) -> list[Record]:
@@ -690,11 +711,17 @@ def create(
 
 
 def link(
-    tx: ManagedTransaction, a: Record, rel: str, b: Record, at: dt.datetime
+    tx: ManagedTransaction,
+    a: Record,
+    rel: str,
+    b: Record,
+    at: dt.datetime,
+    *,
+    origin: str | None = None,
 ) -> tuple[bool, list[int]]:
     """``(a)-[:REL]->(b)``, idempotent; whether it was created now, and the sessions an
     OPENED_IN moved away from (see displace_opened_in - naming the new session is the whole
-    repair, no unlink behind it)."""
+    repair, no unlink behind it). *origin* marks an edge a sync owns (and may remove)."""
     rel = check_rel_type(rel)
     if a.id == b.id:
         raise RecordError("a record cannot link to itself")
@@ -706,10 +733,11 @@ def link(
     displaced = displace_opened_in(tx, a.id, b.id) if rel == "OPENED_IN" else []
     tx.run(
         f"MATCH (a:Record {{id: $a}}), (b:Record {{id: $b}}) "
-        f"CREATE (a)-[:{rel} {{created_at: $at}}]->(b)",
+        f"CREATE (a)-[:{rel} {{created_at: $at, origin: $origin}}]->(b)",
         a=a.id,
         b=b.id,
         at=at,
+        origin=origin,
     )
     return True, displaced
 
@@ -827,8 +855,10 @@ def assess(
     at: dt.datetime,
     session: str | None,
 ) -> list[Assessment]:
-    """Level of every task for *today*, after the window bookkeeping; sorted for display."""
+    """Level of every task for *today*, after the window bookkeeping; sorted for display. A
+    task an open task BLOCKS is silent (urgency.blocked)."""
     all_events = events_for(tx, [t.id for t in tasks])
+    blocked = blockers(tx, [t.id for t in tasks])
     out: list[Assessment] = []
     for original in tasks:
         task, events = settle_window(
@@ -840,7 +870,7 @@ def assess(
             at=at,
             session=session,
         )
-        lvl, reason = urgency.level(task, today, cfg, events)
+        lvl, reason = urgency.level(task, today, cfg, events, blocked_by=blocked.get(task.id, []))
         sort_date = task.due or task.anchor or urgency.created_day(task, cfg)
         out.append(Assessment(task, lvl, reason, sort_date))
     return sorted(out, key=lambda a: a.sort_key)

@@ -22,6 +22,9 @@ from kb.records import KNOWLEDGE_KINDS, Record, lucene_escape
 
 THRESHOLD = 0.40
 CANDIDATES = 20
+# the fields the candidates are ranked on; a synced task's brief is left out, or its length
+# would rank it above a closer record and push that one out of the candidates (adr/0009)
+RANKED_FIELDS = ("title", "summary", "body")
 SHOWN = 3
 # StandardTokenizer splits on everything that is not a letter or a digit, and so does this
 WORD = re.compile(r"[^\W_]+")
@@ -92,6 +95,12 @@ def text_of(rec: Record) -> str:
     return f"{rec.title} {rec.summary or ''}"
 
 
+def candidate_query(text: str) -> str:
+    """*text*, escaped, against each of RANKED_FIELDS."""
+    escaped = lucene_escape(text)
+    return " OR ".join(f"{name}:({escaped})" for name in RANKED_FIELDS)
+
+
 def find(
     tx: ManagedTransaction,
     corpus: Corpus,
@@ -121,7 +130,7 @@ def find(
         "AND ($scopes IS NULL OR node.scope IN $scopes) "
         "AND (NOT $no_odoo OR coalesce(node.source, 'manual') <> 'odoo') "
         "RETURN node LIMIT $candidates",
-        q=lucene_escape(text),
+        q=candidate_query(text),
         kinds=list(family(kind)),
         exclude=list(exclude),
         scopes=scopes,

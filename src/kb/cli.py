@@ -1114,19 +1114,24 @@ def show(app: App, ref: str, scope_flag: str | None) -> None:
 
     def work(
         tx: ManagedTransaction,
-    ) -> tuple[records.Record, list[records.Event], list[records.Link]]:
+    ) -> tuple[records.Record, list[records.Event], list[records.Link], list[int]]:
         rec = records.resolve(tx, ref, scopes)
         events = records.events_of(tx, rec.id)
         if rec.kind == "task":
             rec, events = records.settle_window(
                 tx, rec, events=events, today=today, cfg=cfg, at=at, session=app.session
             )
-        return rec, events, records.links_of(tx, rec.id)
+        blocked_by = records.blockers(tx, [rec.id]).get(rec.id, [])
+        return rec, events, records.links_of(tx, rec.id), blocked_by
 
     with cli_errors():
-        rec, events, links = app.write(work)
+        rec, events, links, blocked_by = app.write(work)
     links, hidden = split_links(links, scopes)
-    urgency_info = urgency.as_json(rec, today, cfg, events) if rec.kind == "task" else None
+    urgency_info = (
+        urgency.as_json(rec, today, cfg, events, blocked_by=blocked_by)
+        if rec.kind == "task"
+        else None
+    )
     if app.as_json:
         app.emit(
             {
@@ -1162,6 +1167,10 @@ def show(app: App, ref: str, scope_flag: str | None) -> None:
             lines.append(
                 f"urgency: {urgency.describe(urgency_info['level'], urgency_info['reason'])}"
             )
+        if rec.estimate is not None or rec.open_questions is not None:
+            hours = "-" if rec.estimate is None else f"{rec.estimate:g}h"
+            asked = "-" if rec.open_questions is None else rec.open_questions
+            lines.append(f"estimate: {hours}  open questions: {asked}")
     if rec.kind == "session":
         lines.append(session_state_line(rec))
     meta = f"created: {stamp(rec.created_at)}  updated: {stamp(rec.updated_at)}"
@@ -1172,6 +1181,8 @@ def show(app: App, ref: str, scope_flag: str | None) -> None:
     lines.append(meta)
     if rec.body:
         lines += ["", rec.body.rstrip("\n")]
+    if rec.brief:
+        lines += ["", "brief:", rec.brief.rstrip("\n")]
     lines += link_section(rec, links, hidden)
     if events:
         lines += ["", "events:"]
@@ -1226,8 +1237,8 @@ def event_line(event: records.Event) -> str:
 
 
 @main.command(
-    help="Full-text search over title, summary and body: Lucene syntax, and the words as plain "
-    "text when Lucene cannot parse them."
+    help="Full-text search over title, summary, body and a synced brief: Lucene syntax, and the "
+    "words as plain text when Lucene cannot parse them."
 )
 @click.argument("query_text", metavar="QUERY")
 @click.option("--scope", "scope_flag")
@@ -1754,17 +1765,22 @@ def why(app: App, ref: str, scope_flag: str | None) -> None:
     cfg = app.cfg
     today = calendar.today(cfg)
 
-    def work(tx: ManagedTransaction) -> tuple[records.Record, list[records.Event]]:
+    def work(tx: ManagedTransaction) -> tuple[records.Record, list[records.Event], list[int]]:
         rec = records.resolve(tx, ref, scopes)
         if rec.kind != "task":
             raise records.RecordError(f"[{rec.id}] is a {rec.kind}; why applies to tasks")
-        return rec, records.events_of(tx, rec.id)
+        blocked_by = records.blockers(tx, [rec.id]).get(rec.id, [])
+        return rec, records.events_of(tx, rec.id), blocked_by
 
     with cli_errors():
-        rec, events = app.read(work)
-    lines = urgency.explain(rec, today, cfg, events)
+        rec, events, blocked_by = app.read(work)
+    lines = urgency.explain(rec, today, cfg, events, blocked_by=blocked_by)
     app.emit(
-        {**urgency.as_json(rec, today, cfg, events), "id": rec.id, "explanation": lines},
+        {
+            **urgency.as_json(rec, today, cfg, events, blocked_by=blocked_by),
+            "id": rec.id,
+            "explanation": lines,
+        },
         "\n".join([record_line(rec), *lines]),
     )
 
@@ -2352,11 +2368,27 @@ def sync() -> None:
     pass
 
 
+class _DryRun(Exception):  # noqa: N818 - a rollback carrying its result, not an error
+    """Raised inside the sync's transaction to roll it back with the result in hand."""
+
+    def __init__(self, result: sync_odoo.SyncResult, previous_untracked: int | None) -> None:
+        super().__init__("dry run")
+        self.result = result
+        self.previous_untracked = previous_untracked
+
+
 @sync.command("odoo", help="Upsert my open Odoo tasks as Task records; exit 0 on any failure.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print what one sync would change, record by record, and write nothing.",
+)
 @json_option
 @pass_app
-def sync_odoo_cmd(app: App) -> None:
-    """[sources.odoo] disabled: silent. Failure: Meta ok=false, one stderr line, exit 0."""
+def sync_odoo_cmd(app: App, dry_run: bool) -> None:
+    """[sources.odoo] disabled: silent. Failure: Meta ok=false, one stderr line, exit 0. A dry
+    run reads Odoo, runs the whole upsert in a transaction it rolls back, and records nothing,
+    not even a failure."""
     at = calendar.now(app.cfg)
     rows: list[dict[str, Any]] | None = None
     try:
@@ -2371,10 +2403,15 @@ def sync_odoo_cmd(app: App) -> None:
         def work(tx: ManagedTransaction) -> tuple[sync_odoo.SyncResult, int | None]:
             previous = records.get_meta(tx, sync_odoo.META_NAME) or {}
             result = sync_odoo.upsert(tx, fetched, cfg, at, app.session)
+            if dry_run:
+                raise _DryRun(result, previous.get("untracked"))
             sync_odoo.write_meta(tx, at, True, None, len(fetched), untracked=len(result.untracked))
             return result, previous.get("untracked")
 
-        result, previous_untracked = app.write(work)
+        try:
+            result, previous_untracked = app.write(work)
+        except _DryRun as planned:
+            result, previous_untracked = planned.result, planned.previous_untracked
     except (
         sync_odoo.SyncError,
         click.ClickException,
@@ -2384,10 +2421,16 @@ def sync_odoo_cmd(app: App) -> None:
         ValueError,
     ) as exc:
         message = exc.message if isinstance(exc, click.ClickException) else str(exc)
-        _record_sync_failure(app, at, message, len(rows) if rows is not None else None)
+        if not dry_run:
+            _record_sync_failure(app, at, message, len(rows) if rows is not None else None)
         click.echo(f"kb sync odoo: {message}", err=True)
         return
-    app.emit(result.to_json(), "\n".join(result.summary(previous_untracked=previous_untracked)))
+    lines = result.summary(previous_untracked=previous_untracked)
+    if dry_run:
+        lines = ["dry run: nothing written", lines[0], *result.change_lines(), *lines[1:]]
+        app.emit({**result.to_json(), "dry_run": True}, "\n".join(lines))
+        return
+    app.emit(result.to_json(), "\n".join(lines))
 
 
 def _record_sync_failure(app: App, at: dt.datetime, error: str, count: int | None) -> None:

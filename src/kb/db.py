@@ -40,7 +40,8 @@ REQUIRED_INDEXES = frozenset(
 # and Neo4j refuses a second full-text index on the same label and properties (docs/adr/0006).
 FULLTEXT_INDEX = "record_text"
 FULLTEXT_LABEL = "Record"
-FULLTEXT_PROPERTIES = ("title", "summary", "body")
+# brief: the task text the Odoo sync keeps (docs/adr/0009)
+FULLTEXT_PROPERTIES = ("title", "summary", "body", "brief")
 # Neo4j's default analyzer, named so the definition does not depend on the server's default
 FULLTEXT_ANALYZER = "standard-no-stop-words"
 FULLTEXT_CREATE = (
