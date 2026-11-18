@@ -145,7 +145,9 @@ state `open` for those tasks).
 
 Every Odoo gives `id`, `name`, `stage_id`, `date_assign`, `date_deadline` and `create_date`. The
 optional fields are read only where `fields_get` lists them, since a `search_read` naming a field
-the model lacks fails as a whole; an Odoo without them syncs as before:
+the model lacks fails as a whole; an Odoo without them syncs as before. `parent_id`,
+`depend_on_ids` and `planned_hours` are fields of the core project app (Odoo 16), so any Odoo
+brings links and estimates; the rest come with OCA project_key and an AI-driven project module:
 
 | Odoo field | On the kb record |
 | --- | --- |

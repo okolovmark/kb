@@ -4,6 +4,7 @@ parent and the blockers as links, the brief, the estimate and the open question 
 
 import datetime as dt
 import json
+import re
 import stat
 import urllib.error
 import urllib.request
@@ -38,6 +39,7 @@ PRESENCE_ONLY = frozenset({"question_ids"})
 QUESTION_MODEL = "project.task.question"
 # task types with a kb type tag of the same meaning; the others have none
 TYPE_TAGS = {"bug": "bug", "feature": "feature"}
+RECORD_REF = re.compile(r"\[(\d+)\]")
 
 
 class SyncError(Exception):
@@ -73,7 +75,7 @@ class Duplicate:
 class Change:
     """What one sync does to one record: ``new``, the fields and links it changes, or closed."""
 
-    id: int
+    id: int | None  # None for a new record in a dry run: its id was rolled back
     key: str
     title: str
     kind: str  # new | updated | closed
@@ -113,12 +115,6 @@ class SyncResult:
             "changes": [c.to_json() for c in self.changes],
         }
 
-    def change_lines(self) -> list[str]:
-        """One line per record the sync creates, changes or closes: new, then updated, then
-        closed, each in the order of the rows."""
-        order = {"new": 0, "updated": 1, "closed": 2}
-        return [c.line() for c in sorted(self.changes, key=lambda c: order[c.kind])]
-
     def summary(self, *, previous_untracked: int | None) -> list[str]:
         """One line of counts; the untracked list (capped) only when its size changed."""
         lines = [
@@ -138,6 +134,47 @@ class SyncResult:
         # once: a hint belongs to the run that created the record, the next run is silent
         lines += [d.line() for d in self.duplicates]
         return lines
+
+    def dry_run(self, *, previous_untracked: int | None) -> tuple[list[str], dict[str, Any]]:
+        """Text lines and JSON of a dry run. The records it would create were rolled back with
+        their ids, which the next write hands out again: a new record is named by its key,
+        never by its id, and a duplicate hint says to promote the thread before a real sync."""
+        new = {c.id: c.key for c in self.changes if c.kind == "new"}
+
+        def named(text: str) -> str:
+            return RECORD_REF.sub(
+                lambda m: f"[new {new[int(m[1])]}]" if int(m[1]) in new else m[0], text
+            )
+
+        changes = [
+            Change(None if c.id in new else c.id, c.key, c.title, c.kind, list(map(named, c.what)))
+            for c in self.changes
+        ]
+        hints = [
+            f"possible duplicate: new {d.new.title} ~ [{d.old.id}] {d.old.title}: "
+            f"kb promote {d.old.id} {d.key} before a real sync creates it"
+            for d in self.duplicates
+        ]
+        counts = self.summary(previous_untracked=previous_untracked)[: -len(hints) or None]
+        order = {"new": 0, "updated": 1, "closed": 2}
+        lines = [
+            "dry run: nothing written",
+            counts[0],
+            *(c.line() for c in sorted(changes, key=lambda c: order[c.kind])),
+            *counts[1:],
+            *hints,
+        ]
+        data = {
+            **self.to_json(),
+            "dry_run": True,
+            "created": [c.key for c in changes if c.kind == "new"],
+            "changes": [c.to_json() for c in changes],
+            "possible_duplicates": [
+                {"new": d.key, "old": d.old.id, "similarity": round(d.similarity, 3)}
+                for d in self.duplicates
+            ],
+        }
+        return lines, data
 
 
 def read_password(path: Path) -> str:
@@ -456,7 +493,7 @@ def upsert(
     for row in rows:
         try:
             props = desired_props(row, cfg, vocab)
-        except (records.RecordError, KeyError, ValueError, TypeError) as exc:
+        except (records.RecordError, KeyError, ValueError) as exc:
             result.skipped.append(f"{row.get('id', '?')} ({exc})")
             continue
         props_of[row["id"]] = props

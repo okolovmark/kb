@@ -987,3 +987,36 @@ def test_tagging_a_synced_task_keeps_its_title_following_odoo(kb_env, odoo: Fake
     odoo.tasks[0]["name"] = "First task, renamed twice"
     runner.invoke(main, ["sync", "odoo"])
     assert odoo_tasks(kb_env)["KIO-1700"]["title"] == "KIO-1700 First task, renamed"
+
+
+def test_a_dry_run_names_new_records_by_key_never_by_id(kb_env, odoo: FakeOdoo) -> None:
+    """The records a dry run would create are rolled back with their ids, and the next write
+    hands those ids out again: an id printed for one could name another record by then."""
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    odoo.tasks = [dict(CHILD, parent_id=False, depend_on_ids=[])]
+    assert runner.invoke(main, ["sync", "odoo"]).exit_code == 0
+    child = odoo_tasks(kb_env)["KIO-1801"]["id"]
+    title = "Unblock the widget export"
+    thread = kb_json(runner, "add", title, "--scope", "proj", "--tag", "demo")
+    odoo.tasks = [dict(CHILD, parent_id=False, depend_on_ids=[203]), dict(BLOCKER, name=title)]
+    planned = runner.invoke(main, ["sync", "odoo", "--dry-run"])
+    assert planned.exit_code == 0, planned.output
+    assert planned.output.splitlines() == [
+        "dry run: nothing written",
+        "odoo: 2 open tasks, 1 new, 1 updated, 0 closed",
+        f"new KIO-1802 {title}",
+        f"[{child}] KIO-1801: +BLOCKS <- [new KIO-1802]",
+        f"possible duplicate: new KIO-1802 {title} ~ [{thread['id']}] {title}: "
+        f"kb promote {thread['id']} KIO-1802 before a real sync creates it",
+    ]
+    data = kb_json(runner, "sync", "odoo", "--dry-run")
+    assert data["created"] == ["KIO-1802"]
+    assert [(c["id"], c["key"], c["kind"]) for c in data["changes"]] == [
+        (None, "KIO-1802", "new"),
+        (child, "KIO-1801", "updated"),
+    ]
+    assert [(d["new"], d["old"]) for d in data["possible_duplicates"]] == [
+        ("KIO-1802", thread["id"])
+    ]
+    assert sorted(odoo_tasks(kb_env)) == ["KIO-1801"]

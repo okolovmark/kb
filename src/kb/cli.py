@@ -2425,12 +2425,11 @@ def sync_odoo_cmd(app: App, dry_run: bool) -> None:
             _record_sync_failure(app, at, message, len(rows) if rows is not None else None)
         click.echo(f"kb sync odoo: {message}", err=True)
         return
-    lines = result.summary(previous_untracked=previous_untracked)
     if dry_run:
-        lines = ["dry run: nothing written", lines[0], *result.change_lines(), *lines[1:]]
-        app.emit({**result.to_json(), "dry_run": True}, "\n".join(lines))
+        lines, data = result.dry_run(previous_untracked=previous_untracked)
+        app.emit(data, "\n".join(lines))
         return
-    app.emit(result.to_json(), "\n".join(lines))
+    app.emit(result.to_json(), "\n".join(result.summary(previous_untracked=previous_untracked)))
 
 
 def _record_sync_failure(app: App, at: dt.datetime, error: str, count: int | None) -> None:

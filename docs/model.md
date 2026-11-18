@@ -203,7 +203,8 @@ Working days are Monday to Friday minus the public holidays of `[calendar] count
 **Blocked.** A task an open task `BLOCKS` (one neither done nor archived) is silent, with the
 reason `blocked by [id], ...`, whatever its schedule says: `today` and `next` leave it out,
 `next --all` lists it. Like a snooze, it cannot silence the scream of a hard deadline that has
-come. Once every blocker is done the task's own level is back. Reasoning:
+come. Once every blocker is done the task's own level is back; a `window` task counts the
+windows it was blocked through as skipped, so it may come back in the backlog. Reasoning:
 [adr/0009](adr/0009-the-odoo-sync-brings-the-task-agent-layer.md).
 
 ## Events and relationships

@@ -17,7 +17,8 @@ for no knowledge records made from the task's notes or answers, which the brief 
 ## Decision
 
 - **Optional fields, one `fields_get`.** Each field is read only where the task model has it:
-  a `search_read` naming a missing field fails as a whole. An Odoo without them syncs as before.
+  a `search_read` naming a missing field fails as a whole. An Odoo without them syncs as before;
+  the parent, the blockers and the estimate are core project fields, so every Odoo 16 has those.
 - **A module is an area by name, or nothing.** A module whose technical name is an area of the
   scope's vocabulary tags the task; any other is skipped. The vocabulary stays closed (0007):
   the sync never adds an area. The task type maps to a type tag only where kb has one of the
@@ -55,3 +56,7 @@ for no knowledge records made from the task's notes or answers, which the brief 
   blocker record and is not silenced; its brief still names the blocker.
 - An edge to a task that left the result (closed, or reassigned) stays, since the sync cannot
   tell which; a done blocker blocks nothing, so the edge only records history.
+- A `window` task blocked through its windows counts them as skipped, as it does any window
+  nobody closed; only a hand-drawn `BLOCKS` can reach one, since synced tasks are `soft` or `age`.
+- A dry run names a record it would create by its key: the id was rolled back and the next write
+  hands it out again.
