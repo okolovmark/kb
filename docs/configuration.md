@@ -193,7 +193,8 @@ Every matched or created record gets `synced_at`; a record with `synced_at` that
 result gets a `done` event `closed in Odoo`. Odoo-sourced records the sync has never seen
 (promoted, migrated) are left alone and listed as `n untracked odoo records (not in the result
 set): <up to 8 ids, … and N more>` when their number differs from the previous run (the count lives
-in the Meta node). A row the mapping rejects (no dates) is skipped and named in the summary.
+in the Meta node). A row the mapping rejects (no dates) is skipped and named in the summary; its
+records stay as they are, neither refreshed nor closed.
 
 The outcome lands in `(:Meta {name: "odoo_sync"})`: `at`, `ok`, `error`, `count` (kept from the last
 good run when the failure came before any row was fetched). Any failure prints one line on stderr
