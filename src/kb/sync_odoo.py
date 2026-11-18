@@ -495,6 +495,10 @@ def upsert(
             props = desired_props(row, cfg, vocab)
         except (records.RecordError, KeyError, ValueError) as exc:
             result.skipped.append(f"{row.get('id', '?')} ({exc})")
+            # Odoo still lists the task: its records stay as they are, neither refreshed nor
+            # closed as gone from Odoo (closing a blocker would unblock what it blocks)
+            for key in dict.fromkeys(str(k) for k in (row.get("key"), row.get("id")) if k):
+                matched.update(rec.id for rec in by_external.get(key, []))
             continue
         props_of[row["id"]] = props
         group = [

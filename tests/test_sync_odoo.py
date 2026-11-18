@@ -527,6 +527,27 @@ def test_long_names_are_truncated_and_bad_rows_skipped(kb_env, odoo: FakeOdoo) -
     assert meta(kb_env)["ok"] is True and meta(kb_env)["count"] == 2
 
 
+def test_a_row_skipped_later_keeps_its_record_open_and_blocking(kb_env, odoo: FakeOdoo) -> None:
+    """Odoo still lists a task whose row the mapping rejects: its record is neither refreshed
+    nor closed as gone from Odoo, so the task it blocks stays blocked."""
+    odoo.tasks = [dict(TASKS[0], depend_on_ids=[102]), dict(TASKS[1])]
+    configure(kb_env, odoo.url)
+    runner = CliRunner()
+    assert runner.invoke(main, ["sync", "odoo"]).exit_code == 0
+    blocked = odoo_tasks(kb_env)["KIO-1700"]["id"]
+    assert "blocked by" in kb_json(runner, "show", str(blocked))["urgency"]["reason"]
+    odoo.tasks[1].update(date_assign=False, create_date=False, stage_id=[4, "Review"])
+    result = runner.invoke(main, ["sync", "odoo"])
+    assert result.output.strip() == (
+        "odoo: 2 open tasks, 0 new, 0 updated, 0 closed, "
+        "skipped rows: 102 (no date_assign and no create_date)"
+    )
+    skipped = odoo_tasks(kb_env)["KIO-1701"]
+    assert "done_at" not in skipped and skipped["kinds"] == ["created"]
+    assert skipped["stage"] == "To Do"  # not refreshed either
+    assert "blocked by" in kb_json(runner, "show", str(blocked))["urgency"]["reason"]
+
+
 def test_a_failure_inside_the_write_still_records_meta(kb_env, odoo: FakeOdoo, monkeypatch) -> None:
     configure(kb_env, odoo.url)
     runner = CliRunner()
