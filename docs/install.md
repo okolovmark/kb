@@ -12,7 +12,7 @@ kb-setup                                                      # idempotent; --dr
 
 `kb-setup` writes the files below, sets the initial password, enables the unit, waits for bolt and
 a `RETURN 1`, then creates the schema (constraints `record_id`, `record_slug`, `counter_name`,
-`meta_name`, `session_id`; full-text index `record_text` on title, summary and body; range indexes
+`meta_name`, `session_id`; full-text index `record_text` on title, summary, body and brief; range indexes
 `record_kind`, `record_scope`, `record_external_id`, `event_kind`) and the `Counter` node (value
 264, first allocated id 265). A re-run rewrites what changed and restarts a running service only
 when the unit or conf changed.
@@ -99,9 +99,12 @@ before the error is reported; if that fails too, the error names the dump to loa
 ## Upgrade
 
 ```sh
-nix profile upgrade kb
+nix profile upgrade kb --refresh
 kb-setup          # rewrites the unit for the new store path, restarts, re-runs the schema
 ```
+
+Without `--refresh` the upgrade re-locks the commit nix already fetched and rebuilds the old code
+while printing "upgrading"; `kb --version` names the commit the installed build comes from.
 
 Until then `kb status` exits 1 with `upgrade: unit runs <old>, package is <new>: run kb-setup`.
 A release that adds a constraint or an index exits 1 the same way, through `schema: incomplete,
