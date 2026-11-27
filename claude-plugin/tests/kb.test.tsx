@@ -4,6 +4,7 @@ import type { MockClock } from 'claude-code/testing'
 
 import {
   EMPTY_JOURNAL,
+  closePrompt,
   commitDirOf,
   commitsIn,
   kbWritesIn,
@@ -209,6 +210,17 @@ describe('parsers', () => {
     expect(parseNotices('kb: NO MEMORY')).toBe(null)
     expect(noticesLabel(1)).toBe('1 notice')
     expect(noticesLabel(3)).toBe('3 notices')
+  })
+
+  test("the close prompt's kb add names a scope kb add takes", async () => {
+    expect(closePrompt('proj', SID)).toContain('a new task (kb add "<title>" --scope proj)')
+    expect(closePrompt('', SID)).toContain('a new task (kb add "<title>")')
+    // from a cwd in no scope the standup reads 'all', which kb add refuses, and no flag fails there too
+    const noScope = closePrompt('all', SID)
+    expect(noScope).not.toContain('--scope all')
+    expect(noScope).toContain(
+      'a new task (kb add "<title>" --scope <scope>, the scope of the records it relates to, global when none)',
+    )
   })
 })
 

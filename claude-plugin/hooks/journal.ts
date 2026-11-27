@@ -91,9 +91,19 @@ export function mergeFacts(journal: Journal, facts: Facts): Journal {
   return facts.isSummary ? { ...merged, summarized: true, isClosing: false, mark: factCount(merged) } : merged
 }
 
-// What close session asks of Claude, as the person's own words: the session's close, in full.
+// The standup's scope for a cwd in no scope: a view of every scope, which no record is created in
+const ALL_SCOPES_VIEW = 'all'
+
+// What close session asks of Claude, as the person's own words: the session's close, in full. `scope`
+// is the standup's: '' before it loads; from a cwd in no scope kb add has no default, so each task
+// names the scope of the records it relates to.
 export function closePrompt(scope: string, sessionId: string): string {
-  const add = scope === '' ? 'kb add "<title>"' : `kb add "<title>" --scope ${scope}`
+  const add =
+    scope === ''
+      ? 'kb add "<title>"'
+      : scope === ALL_SCOPES_VIEW
+        ? 'kb add "<title>" --scope <scope>, the scope of the records it relates to, global when none'
+        : `kb add "<title>" --scope ${scope}`
   return [
     'Close this session: I pressed close session in the kb band. Do the whole close in this turn, in this order, and start no new work.',
     '',
